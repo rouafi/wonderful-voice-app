@@ -40,7 +40,7 @@ export interface AgentContext {
 export class BookingAgent {
   private apiKey: string;
   private apiUrl = "https://openrouter.ai/api/v1/chat/completions";
-  private model = "openai/gpt-4o-mini"; // Cost-effective model
+  private model = "google/gemini-2.5-flash"; // Cost-effective model
 
   constructor(apiKey: string) {
     // Trim whitespace and validate
