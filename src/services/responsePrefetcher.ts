@@ -31,12 +31,16 @@ export class ResponsePrefetcher {
       keywords: string[];
     }> = [
       {
-        text: "Hello! How can I help you today?",
+        text: "Hello! Welcome to our Paris XVI clinic. How can I help you today?",
         keywords: ["hello", "greeting", "hi"],
       },
       {
         text: "Could you please clarify the date and time?",
         keywords: ["clarify", "date", "time", "unclear"],
+      },
+      {
+        text: "Could you please clarify the date and time for your appointment?",
+        keywords: ["clarify appointment", "date time appointment"],
       },
       {
         text: "I understand. Let me check the availability for you.",
@@ -45,6 +49,18 @@ export class ResponsePrefetcher {
       {
         text: "I'm sorry, I didn't catch that. Could you repeat?",
         keywords: ["sorry", "didn't catch", "repeat"],
+      },
+      {
+        text: "I'm sorry, that time isn't available. Could you suggest another time?",
+        keywords: ["not available", "unavailable", "suggest another"],
+      },
+      {
+        text: "Great! Your appointment is confirmed. You'll receive an SMS confirmation shortly.",
+        keywords: ["appointment confirmed", "confirmed", "SMS confirmation"],
+      },
+      {
+        text: "I've checked the availability. Please check your SMS for details.",
+        keywords: ["checked availability", "SMS details"],
       },
       {
         text: "Thank you for calling. Have a great day!",
