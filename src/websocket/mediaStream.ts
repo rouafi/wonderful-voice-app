@@ -72,15 +72,16 @@ export function createMediaStreamServer(server: any): WebSocketServer {
                 callSid,
                 {
                   mode: "patient",
-                  silenceTimeout: 2000, // 2s for booking questions
+                  silenceTimeout: 600, // 1s for faster response (optimized from 2s)
                 },
                 async (callSid) => {
                   // Callback when turn is complete
+                  const turnCompleteStartTime = Date.now();
                   console.log(
                     `🎯 Turn complete for call ${callSid.substring(
                       0,
                       8
-                    )} - patient finished speaking`
+                    )} - patient finished speaking [T+0ms]`
                   );
 
                   // Get patient phone number
@@ -131,9 +132,15 @@ export function createMediaStreamServer(server: any): WebSocketServer {
                     return;
                   }
 
+                  // Calculate VAD latency: time from last final transcript to turn complete detection
+                  // This includes the silence timeout (1s) + delayed check (500ms) + frequent checking
+                  const vadLatency =
+                    turnCompleteStartTime - latestTranscript.timestamp;
+
                   console.log(
                     `🤖 Processing transcript with agent: "${latestTranscript.text}"`
                   );
+                  console.log(`   VAD latency: ${vadLatency}ms`);
 
                   if (!agentManager) {
                     console.error(
@@ -144,13 +151,16 @@ export function createMediaStreamServer(server: any): WebSocketServer {
 
                   try {
                     // Process with agent
+                    const agentStartTime = Date.now();
                     const agentResponse = await agentManager.processTranscript(
                       callSid,
                       patientPhone,
                       latestTranscript.text
                     );
+                    const agentLatency = Date.now() - agentStartTime;
 
                     console.log(`🤖 Agent response: ${agentResponse.text}`);
+                    console.log(`   LLM latency: ${agentLatency}ms`);
                     if (agentResponse.intent === "book_appointment") {
                       console.log(`✅ Appointment booking intent detected`);
                     }
@@ -189,12 +199,16 @@ export function createMediaStreamServer(server: any): WebSocketServer {
                         `⚠️ StreamSid not available in session, cannot send TTS`
                       );
                     } else {
+                      const ttsStartTime = Date.now();
+
                       console.log(
                         `🔊 Preparing to send TTS for response: "${agentResponse.text.substring(
                           0,
                           50
                         )}..."`
                       );
+                      console.log(`   VAD latency: ${vadLatency}ms`);
+                      console.log(`   LLM latency: ${agentLatency}ms`);
                       console.log(
                         `   WebSocket available: ${!!currentSession.webSocket}`
                       );
@@ -206,16 +220,16 @@ export function createMediaStreamServer(server: any): WebSocketServer {
                         sampleRate: 8000,
                       })
                         .then((audioBuffer) => {
-                          console.log(
-                            `✅ TTS conversion complete, sending to Twilio...`
-                          );
+                          const ttsLatency = Date.now() - ttsStartTime;
                           sendAudioToTwilio(
                             currentSession.webSocket!,
                             currentSession.streamSid!,
                             audioBuffer
                           );
+                          const totalEndToEnd =
+                            Date.now() - turnCompleteStartTime;
                           console.log(
-                            `✅ Agent response sent as audio to caller`
+                            `✅ Agent response sent as audio to caller [TTS: ${ttsLatency}ms, Total E2E: ${totalEndToEnd}ms]`
                           );
                         })
                         .catch((ttsError: any) => {

@@ -57,6 +57,7 @@ export class BookingAgent {
     transcript: string,
     context: AgentContext
   ): Promise<AgentResponse> {
+    const processingStartTime = Date.now();
     console.log(`\n🤖 ===== AGENT PROCESSING TRANSCRIPT =====`);
     console.log(`📝 Transcript: "${transcript}"`);
     console.log(`📞 Call SID: ${context.callSid}`);
@@ -104,6 +105,7 @@ export class BookingAgent {
         `🔑 Making OpenRouter API request with key: ${maskedKey} (length: ${this.apiKey.length})`
       );
 
+      const apiCallStartTime = Date.now();
       const response = await fetch(this.apiUrl, {
         method: "POST",
         headers,
@@ -148,6 +150,9 @@ export class BookingAgent {
         }),
       });
 
+      const apiCallLatency = Date.now() - apiCallStartTime;
+      console.log(`⏱️ OpenRouter API call latency: ${apiCallLatency}ms`);
+
       if (!response.ok) {
         const error = await response.text();
         throw new Error(`OpenRouter API error: ${response.status} - ${error}`);
@@ -166,7 +171,17 @@ export class BookingAgent {
           `🔧 LLM requested tool calls:`,
           JSON.stringify(choice.message.tool_calls, null, 2)
         );
-        return await this.handleToolCalls(choice.message.tool_calls, context);
+        const toolCallStartTime = Date.now();
+        const result = await this.handleToolCalls(
+          choice.message.tool_calls,
+          context
+        );
+        const toolCallLatency = Date.now() - toolCallStartTime;
+        const totalLatency = Date.now() - processingStartTime;
+        console.log(
+          `⏱️ Tool call processing latency: ${toolCallLatency}ms, Total: ${totalLatency}ms`
+        );
+        return result;
       }
 
       // Regular text response
@@ -175,6 +190,11 @@ export class BookingAgent {
         role: "assistant",
         content: assistantMessage,
       });
+
+      const totalLatency = Date.now() - processingStartTime;
+      console.log(
+        `⏱️ Total agent processing latency: ${totalLatency}ms (API: ${apiCallLatency}ms)`
+      );
 
       // Detect intent from response
       const intent = this.detectIntent(transcript, assistantMessage);
@@ -351,6 +371,7 @@ export class BookingAgent {
     );
 
     // Get LLM response with tool results
+    const secondApiCallStartTime = Date.now();
     console.log(`\n🔄 Sending tool results back to LLM for final response...`);
 
     // Format messages correctly for OpenAI-compatible API
@@ -412,6 +433,11 @@ export class BookingAgent {
           temperature: 0.7,
         }),
       });
+
+      const secondApiCallLatency = Date.now() - secondApiCallStartTime;
+      console.log(
+        `⏱️ Second OpenRouter API call latency: ${secondApiCallLatency}ms`
+      );
 
       const data = (await response.json()) as any;
       const assistantMessage = data.choices?.[0]?.message?.content || "";
@@ -488,6 +514,10 @@ export class BookingAgent {
         content: assistantMessage,
       });
 
+      const totalToolCallLatency = Date.now() - secondApiCallStartTime;
+      console.log(
+        `⏱️ Total tool call handler latency: ${totalToolCallLatency}ms (includes 2 API calls)`
+      );
       console.log(`\n🔧 ===== TOOL CALL HANDLER COMPLETE =====\n`);
 
       return {

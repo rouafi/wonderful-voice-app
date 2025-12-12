@@ -52,7 +52,7 @@ export class VADService {
       state.lastFinalTranscriptTime = now;
       // Stop frequent checking and reset to delayed mode
       this.stopFrequentChecking(callSid);
-      // Start delayed check: wait 2 seconds, then start frequent checking
+      // Start delayed check: wait 500ms, then start frequent checking
       this.startDelayedCheck(callSid);
     }
   }
@@ -125,7 +125,8 @@ export class VADService {
   }
 
   /**
-   * Start delayed check: wait 2 seconds after last transcript, then start frequent checking
+   * Start delayed check: wait 500ms after last transcript, then start frequent checking
+   * Optimized for faster response time
    */
   private startDelayedCheck(callSid: string): void {
     // Clear existing delayed timeout if any
@@ -134,14 +135,17 @@ export class VADService {
       clearTimeout(existingTimeout);
     }
 
-    // Wait 2 seconds before starting frequent checks
+    // Wait 500ms before starting frequent checks (reduced from 2s for faster response)
     const timeout = setTimeout(() => {
       this.delayedCheckTimeouts.delete(callSid);
       // Now start frequent checking (200ms interval)
       this.startFrequentChecking(callSid);
-    }, 2000); // Wait 2 seconds
+    }, 500); // Wait 500ms (optimized from 2s)
 
     this.delayedCheckTimeouts.set(callSid, timeout);
+    console.log(
+      `⏱️ VAD: Starting 500ms delayed check for call ${callSid.substring(0, 8)}`
+    );
   }
 
   /**
@@ -264,7 +268,7 @@ export class VADService {
    */
   private getDefaultConfig(): VADConfig {
     return {
-      silenceTimeout: 1500, // 1.5s default
+      silenceTimeout: 600, // 1.5s default
       mode: "patient",
     };
   }
