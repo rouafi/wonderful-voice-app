@@ -148,7 +148,7 @@ export function createMediaStreamServer(server: any): WebSocketServer {
                 callSid,
                 {
                   mode: "patient",
-                  silenceTimeout: 600, // 1s for faster response (optimized from 2s)
+                  silenceTimeout: 400, // 1s for faster response (optimized from 2s)
                 },
                 async (callSid) => {
                   // Callback when turn is complete

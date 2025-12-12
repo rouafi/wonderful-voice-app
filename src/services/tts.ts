@@ -107,42 +107,126 @@ export async function textToSpeech(
 
 /**
  * Split text into chunks for streaming TTS
- * Splits on sentence boundaries (., !, ?) or commas for natural pauses
+ * Strategy: Combine chunks optimally (2+ words) while respecting natural punctuation
+ * - Prefer sentence boundaries (., !, ?)
+ * - Then comma boundaries
+ * - Ensure chunks are at least 2 words but not too large
  */
 function splitTextIntoChunks(
   text: string,
-  maxChunkLength: number = 100
+  maxChunkLength: number = 120
 ): string[] {
-  // First try to split on sentence boundaries
-  const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
+  // Helper to count words in a string
+  const wordCount = (str: string): number => {
+    return str
+      .trim()
+      .split(/\s+/)
+      .filter((w) => w.length > 0).length;
+  };
+
+  // First split on sentence boundaries (., !, ?) - highest priority
+  const sentencePattern = /[^.!?]+[.!?]+/g;
+  const sentences = text.match(sentencePattern) || [text];
   const chunks: string[] = [];
 
   for (const sentence of sentences) {
-    if (sentence.length <= maxChunkLength) {
-      chunks.push(sentence.trim());
-    } else {
-      // If sentence is too long, split on commas
-      const parts = sentence.split(/,/g);
+    const trimmed = sentence.trim();
+    if (trimmed.length === 0) continue;
+
+    // If sentence fits and has at least 2 words, use it as-is
+    if (trimmed.length <= maxChunkLength && wordCount(trimmed) >= 2) {
+      chunks.push(trimmed);
+      continue;
+    }
+
+    // If sentence is too long, split on commas
+    if (trimmed.length > maxChunkLength) {
+      const commaParts = trimmed.split(/,/g);
       let currentChunk = "";
 
-      for (const part of parts) {
-        const trimmed = part.trim();
-        if (currentChunk.length + trimmed.length + 1 <= maxChunkLength) {
-          currentChunk += (currentChunk ? ", " : "") + trimmed;
+      for (let i = 0; i < commaParts.length; i++) {
+        const partRaw = commaParts[i];
+        if (!partRaw) continue;
+        const part = partRaw.trim();
+        if (part.length === 0) continue;
+
+        // Try to combine with current chunk
+        const potentialChunk = currentChunk ? `${currentChunk}, ${part}` : part;
+
+        // If combined chunk fits and has 2+ words, keep combining
+        if (
+          potentialChunk.length <= maxChunkLength &&
+          wordCount(potentialChunk) >= 2
+        ) {
+          currentChunk = potentialChunk;
         } else {
-          if (currentChunk) chunks.push(currentChunk);
-          currentChunk = trimmed;
+          // Current chunk is ready (either too big or can't combine)
+          if (currentChunk && wordCount(currentChunk) >= 2) {
+            chunks.push(currentChunk);
+          }
+          // Start new chunk with current part
+          currentChunk = part;
         }
       }
-      if (currentChunk) chunks.push(currentChunk);
+
+      // Add remaining chunk if it has 2+ words
+      if (currentChunk && wordCount(currentChunk) >= 2) {
+        chunks.push(currentChunk);
+      }
+    } else {
+      // Sentence is short but might have < 2 words - combine with previous if possible
+      if (wordCount(trimmed) >= 2) {
+        chunks.push(trimmed);
+      } else if (chunks.length > 0) {
+        // Combine with last chunk if it won't exceed max length
+        const lastChunk = chunks[chunks.length - 1];
+        const combined = `${lastChunk} ${trimmed}`;
+        if (combined.length <= maxChunkLength) {
+          chunks[chunks.length - 1] = combined;
+        } else {
+          // Can't combine, add as new chunk (even if < 2 words)
+          chunks.push(trimmed);
+        }
+      } else {
+        // First chunk, add it even if < 2 words
+        chunks.push(trimmed);
+      }
     }
   }
 
-  return chunks.filter((chunk) => chunk.length > 0);
+  // Final pass: merge very small chunks (< 2 words) with adjacent chunks
+  const finalChunks: string[] = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    if (!chunk) continue;
+
+    const words = wordCount(chunk);
+
+    if (words < 2 && finalChunks.length > 0) {
+      // Try to merge with previous chunk
+      const lastChunk = finalChunks[finalChunks.length - 1];
+      if (lastChunk) {
+        const combined = `${lastChunk} ${chunk}`;
+        if (combined.length <= maxChunkLength) {
+          finalChunks[finalChunks.length - 1] = combined;
+        } else {
+          // Can't merge, add as separate chunk
+          finalChunks.push(chunk);
+        }
+      } else {
+        finalChunks.push(chunk);
+      }
+    } else {
+      finalChunks.push(chunk);
+    }
+  }
+
+  return finalChunks.filter((chunk) => chunk.trim().length > 0);
 }
 
 /**
  * Stream text to speech - generates and sends audio chunks as they're ready
+ * Only streams if text is long enough to benefit from chunking
  */
 export async function streamTextToSpeech(
   text: string,
@@ -156,14 +240,34 @@ export async function streamTextToSpeech(
     sampleRate = 8000,
   } = options;
 
-  // Split text into chunks for streaming
-  // Smaller chunks (50 chars) = faster first chunk generation
-  const chunks = splitTextIntoChunks(text, 50);
+  // Only stream if text is long (>150 chars) - shorter texts sent as single chunk
+  const STREAMING_THRESHOLD = 150;
+
+  if (text.length <= STREAMING_THRESHOLD) {
+    // Short text - send as single chunk (no streaming artifacts)
+    console.log(
+      `🔊 TTS (non-streaming): "${text.substring(0, 50)}${
+        text.length > 50 ? "..." : ""
+      }" (${text.length} chars - too short to stream)`
+    );
+    const audioBuffer = await textToSpeech(text, {
+      model,
+      encoding,
+      sampleRate,
+      stream: false,
+    });
+    await options.onChunk(audioBuffer);
+    return;
+  }
+
+  // Long text - split into chunks (only on sentence boundaries)
+  // Use larger chunks (200 chars) to minimize breaks
+  const chunks = splitTextIntoChunks(text, 200);
 
   console.log(
     `🔊 Streaming TTS: "${text.substring(0, 50)}${
       text.length > 50 ? "..." : ""
-    }" (${chunks.length} chunks)`
+    }" (${chunks.length} chunks, ${text.length} chars)`
   );
 
   // Process chunks sequentially to maintain order
@@ -175,7 +279,7 @@ export async function streamTextToSpeech(
 
     try {
       // Generate TTS for this chunk
-      const audioBuffer = await textToSpeech(chunk, {
+      const audioBuffer = await textToSpeech(chunk.trim(), {
         model,
         encoding,
         sampleRate,
@@ -189,6 +293,14 @@ export async function streamTextToSpeech(
         console.log(
           `⚡ First audio chunk sent (${audioBuffer.length} bytes) - streaming started`
         );
+      }
+
+      // Add longer delay between chunks to avoid audio artifacts
+      // Only delay if not the last chunk (to avoid unnecessary wait at end)
+      if (i < chunks.length - 1) {
+        // Longer delay: 150ms to allow audio to play smoothly
+        // This prevents the "tip" sound between chunks
+        await new Promise((resolve) => setTimeout(resolve, 150));
       }
     } catch (error: any) {
       console.error(

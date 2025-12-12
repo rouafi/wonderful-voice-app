@@ -140,11 +140,11 @@ export class VADService {
       this.delayedCheckTimeouts.delete(callSid);
       // Now start frequent checking (200ms interval)
       this.startFrequentChecking(callSid);
-    }, 500); // Wait 500ms (optimized from 2s)
+    }, 300); // Wait 500ms (optimized from 2s)
 
     this.delayedCheckTimeouts.set(callSid, timeout);
     console.log(
-      `⏱️ VAD: Starting 500ms delayed check for call ${callSid.substring(0, 8)}`
+      `⏱️ VAD: Starting 300ms delayed check for call ${callSid.substring(0, 8)}`
     );
   }
 
@@ -268,7 +268,7 @@ export class VADService {
    */
   private getDefaultConfig(): VADConfig {
     return {
-      silenceTimeout: 600, // 1.5s default
+      silenceTimeout: 400, // 1.5s default
       mode: "patient",
     };
   }
