@@ -18,8 +18,6 @@ const server = createServer(app);
 
 // Middleware - Log all requests for debugging
 app.use((req, res, next) => {
-  console.log(`\n📥 ${req.method} ${req.path}`);
-  console.log("   Headers:", JSON.stringify(req.headers, null, 2));
   if (Object.keys(req.body || {}).length > 0) {
     console.log("   Body:", JSON.stringify(req.body, null, 2));
   }

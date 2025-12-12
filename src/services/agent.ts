@@ -112,7 +112,8 @@ export class BookingAgent {
         body: JSON.stringify({
           model: this.model,
           messages: messages.map((m) => ({ role: m.role, content: m.content })),
-          temperature: 0.7,
+          temperature: 0.5,
+          max_tokens: 250,
           tools: [
             {
               type: "function",
@@ -370,7 +371,64 @@ export class BookingAgent {
       JSON.stringify(results, null, 2)
     );
 
-    // Get LLM response with tool results
+    // Check if we have a successful booking - skip second API call for speed
+    const hasSuccessfulBooking = results.some((r) => {
+      try {
+        const content = JSON.parse(r.content);
+        return content.available === true && content.smsSent === true;
+      } catch {
+        return false;
+      }
+    });
+
+    if (hasSuccessfulBooking) {
+      // Skip second API call - generate confirmation locally
+      const availableResult = results.find((r) => {
+        try {
+          const content = JSON.parse(r.content);
+          return content.available === true && content.doctorName;
+        } catch {
+          return false;
+        }
+      });
+
+      if (availableResult) {
+        const content = JSON.parse(availableResult.content);
+        const date = new Date(content.dateTime);
+        const formattedDate = date.toLocaleString("en-US", {
+          weekday: "long",
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        });
+
+        const confirmationText = `Great! Your appointment with ${content.doctorName} is confirmed for ${formattedDate}. You'll receive an SMS confirmation shortly.`;
+
+        context.conversationHistory.push({
+          role: "assistant",
+          content: confirmationText,
+        });
+
+        console.log(`✅ Skipped second API call - using local confirmation`);
+        console.log(`⏱️ Saved ~500-2000ms by skipping second API call`);
+
+        return {
+          text: confirmationText,
+          intent: "book_appointment",
+          extractedData: {
+            patientPhone: context.patientPhone,
+          },
+          toolCalls: toolCalls.map((tc) => ({
+            name: tc.function.name,
+            arguments: JSON.parse(tc.function.arguments),
+          })),
+        };
+      }
+    }
+
+    // Only make second API call if booking failed or needs clarification
     const secondApiCallStartTime = Date.now();
     console.log(`\n🔄 Sending tool results back to LLM for final response...`);
 
@@ -430,7 +488,8 @@ export class BookingAgent {
         body: JSON.stringify({
           model: this.model,
           messages: messagesForAPI,
-          temperature: 0.7,
+          temperature: 0.5,
+          max_tokens: 250,
         }),
       });
 
@@ -544,31 +603,14 @@ export class BookingAgent {
    * Build system prompt for the agent
    */
   private buildSystemPrompt(context: AgentContext): string {
-    return `You are a helpful medical appointment booking assistant. Your role is to:
+    return `Medical appointment booking assistant. Extract date/time, check availability, confirm.
 
-1. Listen to patients who want to book doctor appointments
-2. Extract the date and time they want (with minute precision)
-3. Check doctor availability using the checkDoctorAvailability tool
-4. Confirm appointments and send SMS confirmations
+Rules:
+- Only use checkDoctorAvailability if >80% certain about date/time
+- Keep responses under 2 sentences for voice
+- Format: "Appointment with Dr. [Name] confirmed for [Date/Time]. SMS sent."
 
-Guidelines:
-- Be friendly, professional, and empathetic
-- Ask for clarification if the date/time is unclear
-- When a patient mentions wanting to book, use the checkDoctorAvailability tool
-- If the patient doesn't specify a doctor, find any available doctor
-- CRITICAL: Only use checkDoctorAvailability when you are >80% certain about the date and time
-- If you're less than 80% certain, ask for clarification instead
-- Always confirm the appointment details before booking
-- Keep responses concise for voice conversations
-
-IMPORTANT - When confirming an appointment, always mention:
-- The doctor's full name (e.g., "Dr. Sarah Smith" or "Dr. Michael Johnson")
-- The appointment date and time in a natural, readable format (e.g., "Monday, January 15, 2024, at 2:30 PM")
-- Format your confirmation like: "Your appointment with [Doctor Name] is confirmed for [Date and Time]"
-- Example: "Great! Your appointment with Dr. Sarah Smith is confirmed for Monday, January 15, 2024, at 2:30 PM. You'll receive an SMS confirmation shortly."
-
-Current patient phone: ${context.patientPhone}
-Call SID: ${context.callSid}`;
+Patient: ${context.patientPhone}`;
   }
 
   /**

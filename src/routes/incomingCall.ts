@@ -23,9 +23,6 @@ router.post("/", (req: Request, res: Response) => {
     // Get the WebSocket URL directly from environment (config might be cached)
     let wsUrl = process.env.WEBSOCKET_URL || config.websocketUrl;
 
-    console.log("🔍 WEBSOCKET_URL from env:", process.env.WEBSOCKET_URL);
-    console.log("🔍 WEBSOCKET_URL being used:", wsUrl);
-
     // Validate WebSocket URL is configured
     if (!wsUrl || wsUrl === "https://your-websocket-url.com" || wsUrl === "") {
       console.error("❌ WEBSOCKET_URL not configured!");
@@ -66,8 +63,6 @@ router.post("/", (req: Request, res: Response) => {
     const twimlResponse = twiml.toString();
     console.log("📤 Sending TwiML response:");
     console.log(twimlResponse);
-    console.log("🔗 WebSocket URL:", wsUrlWithPath);
-    console.log("📋 Full request body:", JSON.stringify(req.body, null, 2));
 
     // Set proper headers for TwiML response
     res.type("text/xml");

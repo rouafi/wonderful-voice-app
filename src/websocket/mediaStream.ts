@@ -65,7 +65,46 @@ export function createMediaStreamServer(server: any): WebSocketServer {
                 accountSid: message.start?.accountSid,
                 webSocket: ws, // Store WebSocket for sending audio back
               });
-              console.log("✅ Session created via SessionManager");
+
+              // Send immediate greeting when call starts (don't wait for patient to speak)
+              const greetingText = "Hello! How can I help you today?";
+              console.log(`👋 Sending immediate greeting: "${greetingText}"`);
+
+              textToSpeech(greetingText, {
+                encoding: "mulaw",
+                sampleRate: 8000,
+              })
+                .then((audioBuffer) => {
+                  // Re-fetch session to ensure we have latest WebSocket state
+                  if (!callSid) {
+                    console.warn(`⚠️ No callSid available for greeting`);
+                    return;
+                  }
+                  const currentSession = sessionManager.getSession(callSid);
+                  if (currentSession?.webSocket && currentSession?.streamSid) {
+                    if (
+                      currentSession.webSocket.readyState === WebSocket.OPEN
+                    ) {
+                      sendAudioToTwilio(
+                        currentSession.webSocket,
+                        currentSession.streamSid,
+                        audioBuffer
+                      );
+                      console.log(`✅ Greeting sent successfully`);
+                    } else {
+                      console.warn(
+                        `⚠️ WebSocket not open yet, greeting will be delayed`
+                      );
+                    }
+                  } else {
+                    console.warn(
+                      `⚠️ Session or WebSocket not available for greeting`
+                    );
+                  }
+                })
+                .catch((ttsError: any) => {
+                  console.error(`❌ Error sending greeting:`, ttsError.message);
+                });
 
               // Configure VAD for patient booking call with callback
               vadService.configure(
