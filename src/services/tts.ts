@@ -95,6 +95,15 @@ export function sendAudioToTwilio(
   audioBuffer: Buffer
 ): void {
   try {
+    // Check if WebSocket is still open
+    if (ws.readyState !== 1) {
+      // 1 = OPEN, 0 = CONNECTING, 2 = CLOSING, 3 = CLOSED
+      console.error(
+        `❌ WebSocket is not open (state: ${ws.readyState}), cannot send audio`
+      );
+      throw new Error(`WebSocket is not open (state: ${ws.readyState})`);
+    }
+
     const payload = audioBuffer.toString("base64");
 
     const message = {
@@ -106,7 +115,9 @@ export function sendAudioToTwilio(
     };
 
     ws.send(JSON.stringify(message));
-    console.log(`📤 Sent audio to Twilio (${audioBuffer.length} bytes)`);
+    console.log(
+      `📤 Sent audio to Twilio (${audioBuffer.length} bytes, streamSid: ${streamSid})`
+    );
   } catch (error: any) {
     console.error("❌ Error sending audio to Twilio:", error);
     throw error;

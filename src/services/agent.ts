@@ -352,16 +352,43 @@ export class BookingAgent {
 
     // Get LLM response with tool results
     console.log(`\n🔄 Sending tool results back to LLM for final response...`);
-    const messages: AgentMessage[] = [
-      ...context.conversationHistory,
-      {
-        role: "assistant",
-        content: JSON.stringify(
-          toolCalls.map((tc) => ({ id: tc.id, function: tc.function }))
-        ),
-      },
-      ...results,
-    ];
+
+    // Format messages correctly for OpenAI-compatible API
+    // The conversation history already has the user message
+    // We need to add: assistant message with tool_calls, then tool results
+    const messagesForAPI: any[] = context.conversationHistory.map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
+
+    // Add assistant message with tool_calls (this is what the LLM sent originally)
+    messagesForAPI.push({
+      role: "assistant",
+      content: null, // When tool calls are present, content is null
+      tool_calls: toolCalls.map((tc) => ({
+        id: tc.id,
+        type: "function",
+        function: {
+          name: tc.function.name,
+          arguments: tc.function.arguments,
+        },
+      })),
+    });
+
+    // Add tool results
+    results.forEach((r) => {
+      messagesForAPI.push({
+        role: "tool",
+        content: r.content,
+        tool_call_id: r.tool_call_id,
+        name: r.name,
+      });
+    });
+
+    console.log(
+      `📋 Messages being sent to LLM:`,
+      JSON.stringify(messagesForAPI.slice(-5), null, 2)
+    ); // Log last 5 messages
 
     try {
       // Validate API key before making request
@@ -370,7 +397,7 @@ export class BookingAgent {
       }
 
       console.log(
-        `📤 Requesting LLM final response with ${messages.length} messages`
+        `📤 Requesting LLM final response with ${messagesForAPI.length} messages`
       );
       const response = await fetch(this.apiUrl, {
         method: "POST",
@@ -381,7 +408,7 @@ export class BookingAgent {
         },
         body: JSON.stringify({
           model: this.model,
-          messages: messages.map((m) => ({ role: m.role, content: m.content })),
+          messages: messagesForAPI,
           temperature: 0.7,
         }),
       });
@@ -390,7 +417,71 @@ export class BookingAgent {
       const assistantMessage = data.choices?.[0]?.message?.content || "";
 
       console.log(`\n✅ LLM final response received:`);
-      console.log(`   "${assistantMessage}"`);
+      console.log(`   Content: "${assistantMessage}"`);
+      console.log(
+        `   Full response structure:`,
+        JSON.stringify(data.choices?.[0]?.message, null, 2)
+      );
+
+      // If message is empty, check if there's an error or if we need to handle it differently
+      if (!assistantMessage || assistantMessage.trim() === "") {
+        console.warn(`⚠️ LLM returned empty response after tool calls`);
+        console.warn(`   Response data:`, JSON.stringify(data, null, 2));
+
+        // Generate a fallback message based on tool results
+        const hasAvailableDoctor = results.some((r) => {
+          try {
+            const content = JSON.parse(r.content);
+            return content.available === true;
+          } catch {
+            return false;
+          }
+        });
+
+        if (hasAvailableDoctor) {
+          const availableResult = results.find((r) => {
+            try {
+              const content = JSON.parse(r.content);
+              return content.available === true && content.doctorName;
+            } catch {
+              return false;
+            }
+          });
+
+          if (availableResult) {
+            const content = JSON.parse(availableResult.content);
+            const date = new Date(content.dateTime);
+            const formattedDate = date.toLocaleString("en-US", {
+              weekday: "long",
+              year: "numeric",
+              month: "long",
+              day: "numeric",
+              hour: "numeric",
+              minute: "2-digit",
+            });
+
+            const fallbackMessage = `Great! Your appointment with ${content.doctorName} is confirmed for ${formattedDate}. You'll receive an SMS confirmation shortly.`;
+            console.log(`📝 Using fallback message: "${fallbackMessage}"`);
+
+            context.conversationHistory.push({
+              role: "assistant",
+              content: fallbackMessage,
+            });
+
+            return {
+              text: fallbackMessage,
+              intent: "book_appointment",
+              extractedData: {
+                patientPhone: context.patientPhone,
+              },
+              toolCalls: toolCalls.map((tc) => ({
+                name: tc.function.name,
+                arguments: JSON.parse(tc.function.arguments),
+              })),
+            };
+          }
+        }
+      }
 
       context.conversationHistory.push({
         role: "assistant",

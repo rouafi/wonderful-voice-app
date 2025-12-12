@@ -164,21 +164,54 @@ export function createMediaStreamServer(server: any): WebSocketServer {
                       );
                     }
 
+                    // Re-fetch session to ensure we have latest WebSocket and streamSid
+                    // (session might have been updated during tool calls)
+                    const currentSession = sessionManager.getSession(callSid);
+
                     // Convert agent response to speech and send back to caller (fire-and-forget)
                     if (
-                      agentResponse.text &&
-                      session.webSocket &&
-                      session.streamSid
+                      !agentResponse.text ||
+                      agentResponse.text.trim() === ""
                     ) {
+                      console.warn(
+                        `⚠️ Agent response text is empty, skipping TTS`
+                      );
+                    } else if (!currentSession) {
+                      console.warn(
+                        `⚠️ Session not found for call ${callSid}, cannot send TTS`
+                      );
+                    } else if (!currentSession.webSocket) {
+                      console.warn(
+                        `⚠️ WebSocket not available in session, cannot send TTS`
+                      );
+                    } else if (!currentSession.streamSid) {
+                      console.warn(
+                        `⚠️ StreamSid not available in session, cannot send TTS`
+                      );
+                    } else {
+                      console.log(
+                        `🔊 Preparing to send TTS for response: "${agentResponse.text.substring(
+                          0,
+                          50
+                        )}..."`
+                      );
+                      console.log(
+                        `   WebSocket available: ${!!currentSession.webSocket}`
+                      );
+                      console.log(`   StreamSid: ${currentSession.streamSid}`);
+
                       // Fire and forget - don't await, just trigger and continue
                       textToSpeech(agentResponse.text, {
                         encoding: "mulaw",
                         sampleRate: 8000,
                       })
                         .then((audioBuffer) => {
+                          console.log(
+                            `✅ TTS conversion complete, sending to Twilio...`
+                          );
                           sendAudioToTwilio(
-                            session.webSocket!,
-                            session.streamSid!,
+                            currentSession.webSocket!,
+                            currentSession.streamSid!,
                             audioBuffer
                           );
                           console.log(
