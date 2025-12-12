@@ -603,12 +603,30 @@ export class BookingAgent {
    * Build system prompt for the agent
    */
   private buildSystemPrompt(context: AgentContext): string {
+    // Get current date and time for context
+    const now = new Date();
+    const currentDate = now.toISOString().split("T")[0]; // YYYY-MM-DD
+    const currentDateTime = now.toISOString(); // Full ISO string
+    const currentDateReadable = now.toLocaleDateString("en-US", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+
     return `Medical appointment booking assistant. Extract date/time, check availability, confirm.
+
+IMPORTANT - Current Date Context:
+- Today's date: ${currentDateReadable}
+- Current date (ISO): ${currentDate}
+- Current date/time (ISO): ${currentDateTime}
+- When patients say "today", "tomorrow", "next week", etc., use these dates relative to the current date above.
 
 Rules:
 - Only use checkDoctorAvailability if >80% certain about date/time
 - Keep responses under 2 sentences for voice
 - Format: "Appointment with Dr. [Name] confirmed for [Date/Time]. SMS sent."
+- Always convert relative dates (today, tomorrow, next Monday) to absolute ISO 8601 dates using the current date context
 
 Patient: ${context.patientPhone}`;
   }
