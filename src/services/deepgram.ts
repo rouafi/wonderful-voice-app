@@ -41,18 +41,11 @@ export function createDeepgramClient() {
   });
 
   connection.on(LiveTranscriptionEvents.Transcript, (data) => {
-    console.log(
-      "🔍 Raw transcript data received:",
-      JSON.stringify(data, null, 2)
-    );
     const transcript = data.channel?.alternatives?.[0]?.transcript || "";
     const isFinal = data.is_final;
 
-    console.log(
-      `🔍 Transcript text: "${transcript}", isFinal: ${isFinal}, lastSendTime: ${lastSendTime}`
-    );
-
     if (transcript) {
+      // Calculate latency from last batch send time
       const latency = lastSendTime > 0 ? Date.now() - lastSendTime : 0;
       const timestamp = Date.now();
 
@@ -69,14 +62,13 @@ export function createDeepgramClient() {
           isFinal ? "FINAL" : "INTERIM"
         }] ${transcript} (latency: ${latency}ms)`
       );
-    } else {
-      console.log("⚠️ Empty transcript received, skipping storage");
     }
   });
 
-  // Track send time for latency calculation
+  // Track send time per batch for accurate latency calculation
   const originalSend = connection.send.bind(connection);
   (connection as any).send = (audio: any) => {
+    // Update send time when batch is actually sent
     lastSendTime = Date.now();
     return originalSend(audio);
   };

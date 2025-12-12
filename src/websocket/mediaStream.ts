@@ -1,6 +1,7 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { IncomingMessage } from "http";
 import { createDeepgramClient } from "../services/deepgram.js";
+import { BatchingBackpressureService } from "../services/backpressure.js";
 
 export function createMediaStreamServer(server: any): WebSocketServer {
   console.log("🔧 Setting up WebSocket server on path: /media-stream");
@@ -36,16 +37,10 @@ export function createMediaStreamServer(server: any): WebSocketServer {
     let lastLogTime = Date.now();
     let deepgramConnection: ReturnType<typeof createDeepgramClient> | null =
       null;
-
-    // Initialize Deepgram connection
-    try {
-      deepgramConnection = createDeepgramClient();
-    } catch (error) {
-      console.error("❌ Failed to initialize Deepgram:", error);
-    }
+    let backpressureService: BatchingBackpressureService<Buffer> | null = null;
 
     // Handle incoming messages from Twilio
-    ws.on("message", (data: Buffer) => {
+    ws.on("message", async (data: Buffer) => {
       try {
         const message = JSON.parse(data.toString());
 
@@ -58,23 +53,70 @@ export function createMediaStreamServer(server: any): WebSocketServer {
           console.log("   Account SID:", message.start?.accountSid);
           console.log("   Call SID:", message.start?.callSid);
           console.log("   Tracks:", message.start?.tracks);
+
+          // Initialize Deepgram connection on start event
+          try {
+            deepgramConnection = createDeepgramClient();
+            console.log("✅ Deepgram connection initialized");
+
+            // Initialize batching backpressure service
+            backpressureService = new BatchingBackpressureService<Buffer>(
+              // canSend: check if Deepgram connection is ready
+              () => {
+                if (!deepgramConnection) return false;
+                // Check connection state (1 = OPEN)
+                const state = (deepgramConnection as any).getReadyState?.();
+                return state === 1 || state === undefined; // OPEN or unknown (assume ready)
+              },
+              // sendItem: send batched audio buffer to Deepgram
+              async (batchedAudio: Buffer) => {
+                if (!deepgramConnection) {
+                  throw new Error("Deepgram connection not available");
+                }
+                (deepgramConnection.send as any)(batchedAudio);
+              },
+              {
+                batchSize: 5, // Batch 5 packets together
+                batchTimeout: 100, // Send partial batch after 100ms
+                maxQueueSize: 500, // Max 500 batches in queue
+                processInterval: 50, // Process queue every 50ms
+                onQueueFull: () => {
+                  console.warn("⚠️ Audio queue is full, dropping packets");
+                },
+              }
+            );
+            console.log("✅ Batching backpressure service initialized");
+          } catch (error) {
+            console.error("❌ Failed to initialize Deepgram:", error);
+          }
         } else if (message.event === "media") {
           // Audio data is base64 encoded in message.media.payload
           mediaPacketCount++;
 
-          // Forward audio to Deepgram
-          if (deepgramConnection && message.media?.payload) {
+          // Send individual packet - batching handled by backpressure service
+          if (backpressureService && message.media?.payload) {
             try {
               const audioBuffer = Buffer.from(message.media.payload, "base64");
-              // Send buffer directly - Deepgram SDK accepts Buffer
-              (deepgramConnection.send as any)(audioBuffer);
+              // Backpressure service handles batching and queuing automatically
+              await backpressureService.add(audioBuffer);
+
+              // Log queue size periodically
+              const queueSize = await backpressureService.getQueueSize();
+              if (queueSize > 0 && mediaPacketCount % 100 === 0) {
+                console.log(`📊 Audio queue size: ${queueSize}`);
+              }
             } catch (error) {
-              console.error("❌ Error sending audio to Deepgram:", error);
+              console.error(
+                "❌ Error adding audio to backpressure service:",
+                error
+              );
             }
           } else {
             if (mediaPacketCount === 1) {
-              console.log("⚠️ Deepgram connection not available or no payload");
-              console.log("   deepgramConnection:", !!deepgramConnection);
+              console.log(
+                "⚠️ Backpressure service not available or no payload"
+              );
+              console.log("   backpressureService:", !!backpressureService);
               console.log("   payload exists:", !!message.media?.payload);
             }
           }
@@ -92,6 +134,12 @@ export function createMediaStreamServer(server: any): WebSocketServer {
         } else if (message.event === "stop") {
           console.log("🛑 Media stream stopped");
           console.log(`   Total packets received: ${mediaPacketCount}`);
+
+          // Flush backpressure service (batches + queue)
+          if (backpressureService) {
+            await backpressureService.flush();
+            console.log("✅ Flushed backpressure service");
+          }
         } else {
           console.log(
             "📨 Unknown event:",
@@ -109,8 +157,15 @@ export function createMediaStreamServer(server: any): WebSocketServer {
       console.error("❌ WebSocket error:", error);
     });
 
-    ws.on("close", () => {
+    ws.on("close", async () => {
       console.log("🔌 WebSocket connection closed");
+
+      // Flush backpressure service before closing
+      if (backpressureService) {
+        await backpressureService.flush();
+        console.log("✅ Flushed backpressure service on close");
+      }
+
       if (deepgramConnection) {
         deepgramConnection.finish();
       }
