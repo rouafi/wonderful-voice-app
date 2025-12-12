@@ -103,18 +103,18 @@ export function createMediaStreamServer(server: any): WebSocketServer {
                   );
                 }
               } else {
-                // Fallback to generating TTS
+                // Fallback to generating TTS - use streaming for faster first chunk
+                if (!callSid) {
+                  console.warn(`⚠️ No callSid available for greeting`);
+                  return;
+                }
+
                 textToSpeech(greetingText, {
                   encoding: "mulaw",
                   sampleRate: 8000,
-                })
-                  .then((audioBuffer) => {
-                    // Re-fetch session to ensure we have latest WebSocket state
-                    if (!callSid) {
-                      console.warn(`⚠️ No callSid available for greeting`);
-                      return;
-                    }
-                    const currentSession = sessionManager.getSession(callSid);
+                  stream: true, // Enable streaming
+                  onChunk: async (audioBuffer: Buffer) => {
+                    const currentSession = sessionManager.getSession(callSid!);
                     if (
                       currentSession?.webSocket &&
                       currentSession?.streamSid
@@ -127,17 +127,13 @@ export function createMediaStreamServer(server: any): WebSocketServer {
                           currentSession.streamSid,
                           audioBuffer
                         );
-                        console.log(`✅ Greeting sent successfully`);
-                      } else {
-                        console.warn(
-                          `⚠️ WebSocket not open yet, greeting will be delayed`
-                        );
+                        console.log(`⚡ Greeting chunk sent (streaming)`);
                       }
-                    } else {
-                      console.warn(
-                        `⚠️ Session or WebSocket not available for greeting`
-                      );
                     }
+                  },
+                })
+                  .then(() => {
+                    console.log(`✅ Greeting streamed successfully`);
                   })
                   .catch((ttsError: any) => {
                     console.error(
@@ -373,22 +369,36 @@ export function createMediaStreamServer(server: any): WebSocketServer {
                           `⚡ Agent response sent using prefetched audio [TTS: ${ttsLatency}ms (cached), Total E2E: ${totalEndToEnd}ms]`
                         );
                       } else {
-                        // Generate TTS on demand
+                        // Generate TTS on demand - use streaming for faster first chunk
+                        const firstChunkTime = Date.now();
+                        let firstChunkSent = false;
+
                         textToSpeech(agentResponse.text, {
                           encoding: "mulaw",
                           sampleRate: 8000,
-                        })
-                          .then((audioBuffer) => {
-                            const ttsLatency = Date.now() - ttsStartTime;
+                          stream: true, // Enable streaming
+                          onChunk: async (audioBuffer: Buffer) => {
+                            if (!firstChunkSent) {
+                              const firstChunkLatency =
+                                Date.now() - firstChunkTime;
+                              console.log(
+                                `⚡ First audio chunk ready in ${firstChunkLatency}ms (streaming)`
+                              );
+                              firstChunkSent = true;
+                            }
                             sendAudioToTwilio(
                               currentSession.webSocket!,
                               currentSession.streamSid!,
                               audioBuffer
                             );
+                          },
+                        })
+                          .then(() => {
                             const totalEndToEnd =
                               Date.now() - turnCompleteStartTime;
+                            const ttsLatency = Date.now() - ttsStartTime;
                             console.log(
-                              `✅ Agent response sent as audio to caller [TTS: ${ttsLatency}ms, Total E2E: ${totalEndToEnd}ms]`
+                              `✅ Agent response streamed to caller [TTS: ${ttsLatency}ms (streamed), Total E2E: ${totalEndToEnd}ms]`
                             );
                           })
                           .catch((ttsError: any) => {

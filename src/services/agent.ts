@@ -76,10 +76,17 @@ export class BookingAgent {
     const systemPrompt = this.buildSystemPrompt(context);
 
     // Prepare messages for API
+    // Reduce to last 3 messages for faster processing (user, assistant, user pattern)
     const messages: AgentMessage[] = [
       { role: "system", content: systemPrompt },
-      ...context.conversationHistory.slice(-10), // Keep last 10 messages for context
+      ...context.conversationHistory.slice(-3), // Keep last 3 messages for minimal context
     ];
+
+    console.log(
+      `📊 Sending ${messages.length} messages to LLM (system + ${
+        messages.length - 1
+      } history)`
+    );
 
     try {
       // Validate API key before making request
@@ -112,32 +119,30 @@ export class BookingAgent {
         body: JSON.stringify({
           model: this.model,
           messages: messages.map((m) => ({ role: m.role, content: m.content })),
-          temperature: 0.5,
-          max_tokens: 250,
+          temperature: 0.3, // Lower temperature for faster, more deterministic responses
+          max_tokens: 150, // Reduced from 250 for faster generation
           tools: [
             {
               type: "function",
               function: {
                 name: "checkDoctorAvailability",
                 description:
-                  "Check if a doctor is available at a specific date and time. ONLY use this when you are >80% certain about the date and time. If uncertain, ask for clarification instead.",
+                  "Check doctor availability. Use only if >80% certain about date/time.",
                 parameters: {
                   type: "object",
                   properties: {
                     dateTime: {
                       type: "string",
                       description:
-                        "ISO 8601 datetime string with minute precision (e.g., '2024-01-15T14:30:00Z')",
+                        "ISO 8601 datetime (e.g., '2024-01-15T14:30:00Z')",
                     },
                     doctorId: {
                       type: "string",
-                      description:
-                        "Optional doctor ID. If not provided, will find first available doctor.",
+                      description: "Optional doctor ID",
                     },
                     confidence: {
                       type: "number",
-                      description:
-                        "Your confidence level (0.0 to 1.0) that the dateTime is correctly understood. Must be >0.8 to proceed.",
+                      description: "Confidence 0.0-1.0. Must be >0.8.",
                       minimum: 0,
                       maximum: 1,
                     },
@@ -488,8 +493,8 @@ export class BookingAgent {
         body: JSON.stringify({
           model: this.model,
           messages: messagesForAPI,
-          temperature: 0.5,
-          max_tokens: 250,
+          temperature: 0.3, // Lower temperature for faster responses
+          max_tokens: 150, // Reduced for faster generation
         }),
       });
 
