@@ -1,6 +1,7 @@
 import { createClient, LiveTranscriptionEvents } from "@deepgram/sdk";
 import { config } from "../config/index.js";
 import { packetTracker, PacketStage } from "./packetTracker.js";
+import { sessionManager } from "./sessionManager.js";
 
 // Simple in-memory transcript storage
 export const transcripts: Array<{
@@ -10,7 +11,7 @@ export const transcripts: Array<{
   timestamp: number;
 }> = [];
 
-export function createDeepgramClient() {
+export function createDeepgramClient(callSid?: string) {
   // Check config first (loads from .env via dotenv), then fallback to process.env
   const apiKey = config.deepgram.apiKey || process.env.DEEPGRAM_API_KEY;
   if (!apiKey) {
@@ -33,12 +34,17 @@ export function createDeepgramClient() {
   let lastSendTime = 0;
 
   connection.on(LiveTranscriptionEvents.Open, () => {
-    console.log("🎤 Deepgram connection opened");
+    console.log(
+      `🎤 Deepgram connection opened${callSid ? ` for call ${callSid}` : ""}`
+    );
     lastSendTime = Date.now();
   });
 
   connection.on(LiveTranscriptionEvents.Error, (error) => {
-    console.error("❌ Deepgram error:", error);
+    console.error(
+      `❌ Deepgram error${callSid ? ` for call ${callSid}` : ""}:`,
+      error
+    );
   });
 
   connection.on(LiveTranscriptionEvents.Transcript, (data) => {
@@ -50,12 +56,20 @@ export function createDeepgramClient() {
       const latency = lastSendTime > 0 ? Date.now() - lastSendTime : 0;
       const timestamp = Date.now();
 
-      // Store transcript
+      // Store in global transcripts (for backward compatibility)
       transcripts.push({ text: transcript, isFinal, latency, timestamp });
-
-      // Keep only last 100 transcripts
       if (transcripts.length > 100) {
         transcripts.shift();
+      }
+
+      // Store in session if callSid provided
+      if (callSid) {
+        sessionManager.addTranscript(callSid, {
+          text: transcript,
+          isFinal,
+          latency,
+          timestamp,
+        });
       }
 
       // Track STT processing and correlate with sent batches
@@ -67,9 +81,9 @@ export function createDeepgramClient() {
       );
 
       console.log(
-        `📝 [${
-          isFinal ? "FINAL" : "INTERIM"
-        }] ${transcript} (latency: ${latency}ms)`
+        `📝 [${isFinal ? "FINAL" : "INTERIM"}]${
+          callSid ? ` [call:${callSid.substring(0, 8)}]` : ""
+        } ${transcript} (latency: ${latency}ms)`
       );
     }
   });

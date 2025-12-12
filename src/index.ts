@@ -6,6 +6,7 @@ import { startNgrok } from "./utils/ngrok.js";
 import { createMediaStreamServer } from "./websocket/mediaStream.js";
 import { transcripts } from "./services/deepgram.js";
 import { packetTracker } from "./services/packetTracker.js";
+import { sessionManager } from "./services/sessionManager.js";
 
 dotenv.config();
 
@@ -143,14 +144,86 @@ app.get("/packets/:packetId", (req, res) => {
   });
 });
 
+// Session Management Endpoints
+
+// Get all sessions
+app.get("/sessions", (req, res) => {
+  const activeOnly = req.query.active === "true";
+  const sessions = activeOnly
+    ? sessionManager.getActiveSessions()
+    : sessionManager.getAllSessions();
+
+  res.json({
+    count: sessions.length,
+    sessions: sessions.map((s) => ({
+      callSid: s.callSid,
+      streamSid: s.streamSid,
+      from: s.from,
+      to: s.to,
+      startedAt: s.startedAt,
+      status: s.status,
+      packetCount: s.packetCount,
+      transcriptCount: s.transcripts.length,
+    })),
+  });
+});
+
+// Get session by callSid
+app.get("/sessions/:callSid", (req, res) => {
+  const { callSid } = req.params;
+  const session = sessionManager.getSession(callSid);
+
+  if (!session) {
+    return res.status(404).json({ error: "Session not found" });
+  }
+
+  return res.json({
+    callSid: session.callSid,
+    streamSid: session.streamSid,
+    accountSid: session.accountSid,
+    from: session.from,
+    to: session.to,
+    startedAt: session.startedAt,
+    status: session.status,
+    packetCount: session.packetCount,
+    transcriptCount: session.transcripts.length,
+    transcripts: session.transcripts,
+  });
+});
+
+// Get transcripts for a specific call
+app.get("/calls/:callSid/transcripts", (req, res) => {
+  const { callSid } = req.params;
+  const finalOnly = req.query.final === "true";
+  const session = sessionManager.getSession(callSid);
+
+  if (!session) {
+    return res.status(404).json({ error: "Call session not found" });
+  }
+
+  const filtered = finalOnly
+    ? session.transcripts.filter((t) => t.isFinal)
+    : session.transcripts;
+
+  return res.json({
+    callSid,
+    count: filtered.length,
+    transcripts: filtered,
+  });
+});
+
 // Create WebSocket server for media streams (handles upgrade automatically)
 const wss = createMediaStreamServer(server);
 console.log("🔧 WebSocket server created and attached to HTTP server");
 
 server.listen(PORT, async () => {
+  const baseUrl = `http://${process.env.WEBHOOK_BASE_URL}:${PORT}`;
   console.log(`Server running on port ${PORT}`);
-  console.log(`Webhook endpoint: http://localhost:${PORT}/incoming-call`);
+  console.log(`Webhook endpoint: ${baseUrl}/incoming-call`);
   console.log(`WebSocket endpoint: ws://localhost:${PORT}/media-stream`);
+  console.log(`Session endpoint: ${baseUrl}/media-stream`);
+  console.log(`Sessions endpoint: ${baseUrl}/sessions/:callSid`);
+  console.log(`Transcripts endpoint: ${baseUrl}/sessions?active=true`);
 
   // Optionally start ngrok if ENABLE_NGROK is set
   if (process.env.ENABLE_NGROK === "true") {

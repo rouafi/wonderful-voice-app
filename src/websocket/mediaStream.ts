@@ -1,8 +1,7 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { IncomingMessage } from "http";
-import { createDeepgramClient } from "../services/deepgram.js";
-import { BatchingBackpressureService } from "../services/backpressure.js";
 import { packetTracker, PacketStage } from "../services/packetTracker.js";
+import { sessionManager } from "../services/sessionManager.js";
 import { randomUUID } from "crypto";
 
 export function createMediaStreamServer(server: any): WebSocketServer {
@@ -35,11 +34,8 @@ export function createMediaStreamServer(server: any): WebSocketServer {
     console.log("🔌 WebSocket connection established for media stream");
     console.log("   Remote address:", req.socket.remoteAddress);
 
-    let mediaPacketCount = 0;
+    let callSid: string | null = null;
     let lastLogTime = Date.now();
-    let deepgramConnection: ReturnType<typeof createDeepgramClient> | null =
-      null;
-    let backpressureService: BatchingBackpressureService<Buffer> | null = null;
 
     // Handle incoming messages from Twilio
     ws.on("message", async (data: Buffer) => {
@@ -50,92 +46,80 @@ export function createMediaStreamServer(server: any): WebSocketServer {
           console.log("✅ Media stream connected");
           console.log("   Protocol:", message.protocol);
         } else if (message.event === "start") {
+          callSid = message.start?.callSid;
           console.log("🎬 Media stream started");
           console.log("   Stream SID:", message.start?.streamSid);
           console.log("   Account SID:", message.start?.accountSid);
-          console.log("   Call SID:", message.start?.callSid);
+          console.log("   Call SID:", callSid);
           console.log("   Tracks:", message.start?.tracks);
 
-          // Initialize Deepgram connection on start event
-          try {
-            deepgramConnection = createDeepgramClient();
-            console.log("✅ Deepgram connection initialized");
-
-            // Initialize batching backpressure service
-            backpressureService = new BatchingBackpressureService<Buffer>(
-              // canSend: check if Deepgram connection is ready
-              () => {
-                if (!deepgramConnection) return false;
-                // Check connection state (1 = OPEN)
-                const state = (deepgramConnection as any).getReadyState?.();
-                return state === 1 || state === undefined; // OPEN or unknown (assume ready)
-              },
-              // sendItem: send batched audio buffer to Deepgram
-              async (batchedAudio: Buffer) => {
-                if (!deepgramConnection) {
-                  throw new Error("Deepgram connection not available");
-                }
-                (deepgramConnection.send as any)(batchedAudio);
-              },
-              {
-                batchSize: 5, // Batch 5 packets together
-                batchTimeout: 100, // Send partial batch after 100ms
-                maxQueueSize: 500, // Max 500 batches in queue
-                processInterval: 50, // Process queue every 50ms
-                onQueueFull: () => {
-                  console.warn("⚠️ Audio queue is full, dropping packets");
-                },
-              }
-            );
-            console.log("✅ Batching backpressure service initialized");
-          } catch (error) {
-            console.error("❌ Failed to initialize Deepgram:", error);
+          // Create session using SessionManager
+          if (callSid) {
+            try {
+              const session = sessionManager.createSession(callSid, {
+                streamSid: message.start?.streamSid,
+                accountSid: message.start?.accountSid,
+              });
+              console.log("✅ Session created via SessionManager");
+            } catch (error) {
+              console.error("❌ Failed to create session:", error);
+            }
+          } else {
+            console.warn("⚠️ No callSid in start event");
           }
         } else if (message.event === "media") {
-          // Audio data is base64 encoded in message.media.payload
-          mediaPacketCount++;
+          if (!callSid) {
+            console.warn("⚠️ Received media packet but no callSid");
+            return;
+          }
+
+          const session = sessionManager.getSession(callSid);
+          if (!session) {
+            console.warn(`⚠️ No session found for call ${callSid}`);
+            return;
+          }
+
+          sessionManager.incrementPacketCount(callSid);
 
           // Send individual packet - batching handled by backpressure service
-          if (backpressureService && message.media?.payload) {
+          if (session.backpressureService && message.media?.payload) {
             try {
               const packetId = randomUUID();
               const audioBuffer = Buffer.from(message.media.payload, "base64");
 
               // Track packet arrival
               packetTracker.track(packetId, PacketStage.ARRIVED_FROM_TWILIO, {
-                packetNumber: mediaPacketCount,
+                packetNumber: session.packetCount,
                 payloadSize: audioBuffer.length,
+                callSid: callSid,
               });
 
               // Backpressure service handles batching and queuing automatically
-              await backpressureService.add(audioBuffer, packetId);
+              await session.backpressureService.add(audioBuffer, packetId);
 
               // Log queue size periodically
-              const queueSize = await backpressureService.getQueueSize();
-              if (queueSize > 0 && mediaPacketCount % 100 === 0) {
-                console.log(`📊 Audio queue size: ${queueSize}`);
+              const queueSize =
+                await session.backpressureService.getQueueSize();
+              if (queueSize > 0 && session.packetCount % 100 === 0) {
+                console.log(
+                  `📊 Audio queue size for call ${callSid}: ${queueSize}`
+                );
               }
             } catch (error) {
               console.error(
-                "❌ Error adding audio to backpressure service:",
+                `❌ Error adding audio to backpressure service for call ${callSid}:`,
                 error
               );
-            }
-          } else {
-            if (mediaPacketCount === 1) {
-              console.log(
-                "⚠️ Backpressure service not available or no payload"
-              );
-              console.log("   backpressureService:", !!backpressureService);
-              console.log("   payload exists:", !!message.media?.payload);
             }
           }
 
           // Log every 50 packets or every 5 seconds (to avoid spam)
           const now = Date.now();
-          if (mediaPacketCount % 50 === 0 || now - lastLogTime > 5000) {
+          if (session.packetCount % 50 === 0 || now - lastLogTime > 5000) {
             const payloadSize = message.media?.payload?.length || 0;
-            console.log(`🎵 Audio data received (packet #${mediaPacketCount})`);
+            console.log(
+              `🎵 Audio data received for call ${callSid} (packet #${session.packetCount})`
+            );
             console.log(`   Payload size: ${payloadSize} bytes`);
             console.log(`   Timestamp: ${message.media?.timestamp || "N/A"}`);
             console.log(`   Track: ${message.media?.track || "N/A"}`);
@@ -143,12 +127,15 @@ export function createMediaStreamServer(server: any): WebSocketServer {
           }
         } else if (message.event === "stop") {
           console.log("🛑 Media stream stopped");
-          console.log(`   Total packets received: ${mediaPacketCount}`);
-
-          // Flush backpressure service (batches + queue)
-          if (backpressureService) {
-            await backpressureService.flush();
-            console.log("✅ Flushed backpressure service");
+          if (callSid) {
+            const session = sessionManager.getSession(callSid);
+            if (session) {
+              console.log(
+                `   Total packets received for call ${callSid}: ${session.packetCount}`
+              );
+            }
+            // End session
+            await sessionManager.endSession(callSid);
           }
         } else {
           console.log(
@@ -169,15 +156,8 @@ export function createMediaStreamServer(server: any): WebSocketServer {
 
     ws.on("close", async () => {
       console.log("🔌 WebSocket connection closed");
-
-      // Flush backpressure service before closing
-      if (backpressureService) {
-        await backpressureService.flush();
-        console.log("✅ Flushed backpressure service on close");
-      }
-
-      if (deepgramConnection) {
-        deepgramConnection.finish();
+      if (callSid) {
+        await sessionManager.endSession(callSid);
       }
     });
 
