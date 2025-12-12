@@ -138,7 +138,8 @@ export class BookingAgent {
                     },
                     doctorId: {
                       type: "string",
-                      description: "Optional doctor ID",
+                      description:
+                        "Optional doctor ID. If not provided, will automatically find first available doctor. DO NOT ask patient for doctor name.",
                     },
                     confidence: {
                       type: "number",
@@ -627,11 +628,13 @@ IMPORTANT - Current Date Context:
 - Current date/time (ISO): ${currentDateTime}
 - When patients say "today", "tomorrow", "next week", etc., use these dates relative to the current date above.
 
-Rules:
-- Only use checkDoctorAvailability if >80% certain about date/time
-- Keep responses under 2 sentences for voice
+CRITICAL RULES:
+- ONLY date and time are REQUIRED. Doctor name is OPTIONAL - NEVER ask for it.
+- If patient doesn't specify a doctor, automatically find any available doctor using checkDoctorAvailability without doctorId.
+- Only use checkDoctorAvailability if >80% certain about date/time.
+- Keep responses under 2 sentences for voice.
 - Format: "Appointment with Dr. [Name] confirmed for [Date/Time]. SMS sent."
-- Always convert relative dates (today, tomorrow, next Monday) to absolute ISO 8601 dates using the current date context
+- Always convert relative dates (today, tomorrow, next Monday) to absolute ISO 8601 dates using the current date context.
 
 Patient: ${context.patientPhone}`;
   }
