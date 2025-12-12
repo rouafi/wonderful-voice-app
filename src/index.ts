@@ -7,6 +7,7 @@ import { createMediaStreamServer } from "./websocket/mediaStream.js";
 import { transcripts } from "./services/deepgram.js";
 import { packetTracker } from "./services/packetTracker.js";
 import { sessionManager } from "./services/sessionManager.js";
+import { vadService } from "./services/vad.js";
 
 dotenv.config();
 
@@ -209,6 +210,26 @@ app.get("/calls/:callSid/transcripts", (req, res) => {
     callSid,
     count: filtered.length,
     transcripts: filtered,
+  });
+});
+
+// Get VAD state for a call
+app.get("/calls/:callSid/vad", (req, res) => {
+  const { callSid } = req.params;
+  const state = vadService.getState(callSid);
+  const isTurnComplete = vadService.isTurnComplete(callSid);
+
+  if (!state) {
+    return res.status(404).json({ error: "VAD state not found for this call" });
+  }
+
+  return res.json({
+    callSid,
+    isSpeaking: state.isSpeaking,
+    silenceDuration: state.silenceDuration,
+    lastTranscriptTime: state.lastTranscriptTime,
+    lastFinalTranscriptTime: state.lastFinalTranscriptTime,
+    isTurnComplete,
   });
 });
 

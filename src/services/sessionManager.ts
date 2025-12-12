@@ -1,5 +1,6 @@
 import { createDeepgramClient } from "./deepgram.js";
 import { BatchingBackpressureService } from "./backpressure.js";
+import { vadService } from "./vad.js";
 
 export interface CallSession {
   callSid: string;
@@ -157,6 +158,9 @@ export class SessionManager {
     }
 
     session.status = "ended";
+
+    // Cleanup VAD state
+    vadService.cleanup(callSid);
 
     // Keep session for querying (don't delete immediately)
     // Optionally: delete after some time or limit total sessions

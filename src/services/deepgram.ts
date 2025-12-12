@@ -2,6 +2,7 @@ import { createClient, LiveTranscriptionEvents } from "@deepgram/sdk";
 import { config } from "../config/index.js";
 import { packetTracker, PacketStage } from "./packetTracker.js";
 import { sessionManager } from "./sessionManager.js";
+import { vadService } from "./vad.js";
 
 // Simple in-memory transcript storage
 export const transcripts: Array<{
@@ -70,6 +71,12 @@ export function createDeepgramClient(callSid?: string) {
           latency,
           timestamp,
         });
+
+        // Update VAD from transcript
+        vadService.updateFromTranscript(callSid, isFinal);
+
+        // Note: Turn completion is now detected via periodic checking in VAD service
+        // The callback configured in mediaStream.ts will handle logging
       }
 
       // Track STT processing and correlate with sent batches

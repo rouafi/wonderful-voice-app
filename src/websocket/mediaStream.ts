@@ -2,6 +2,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { IncomingMessage } from "http";
 import { packetTracker, PacketStage } from "../services/packetTracker.js";
 import { sessionManager } from "../services/sessionManager.js";
+import { vadService } from "../services/vad.js";
 import { randomUUID } from "crypto";
 
 export function createMediaStreamServer(server: any): WebSocketServer {
@@ -61,6 +62,26 @@ export function createMediaStreamServer(server: any): WebSocketServer {
                 accountSid: message.start?.accountSid,
               });
               console.log("✅ Session created via SessionManager");
+
+              // Configure VAD for patient booking call with callback
+              vadService.configure(
+                callSid,
+                {
+                  mode: "patient",
+                  silenceTimeout: 2000, // 2s for booking questions
+                },
+                (callSid) => {
+                  // Callback when turn is complete
+                  console.log(
+                    `🎯 Turn complete for call ${callSid.substring(
+                      0,
+                      8
+                    )} - patient finished speaking`
+                  );
+                  // TODO: Trigger agent response or next action here
+                }
+              );
+              console.log("✅ VAD configured for patient mode");
             } catch (error) {
               console.error("❌ Failed to create session:", error);
             }
