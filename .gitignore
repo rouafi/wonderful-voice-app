@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+.DS_Store
+*.log
+
+# Documentation files
+DEBUG.md
+TESTING.md
+TROUBLESHOOTING.md
+TWILIO_SETUP.md
+WEBSOCKET_SETUP.md
