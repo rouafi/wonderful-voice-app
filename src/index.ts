@@ -5,6 +5,7 @@ import { incomingCallRouter } from "./routes/incomingCall.js";
 import { startNgrok } from "./utils/ngrok.js";
 import { createMediaStreamServer } from "./websocket/mediaStream.js";
 import { transcripts } from "./services/deepgram.js";
+import { packetTracker } from "./services/packetTracker.js";
 
 dotenv.config();
 
@@ -54,6 +55,91 @@ app.get("/transcripts", (req, res) => {
   res.json({
     count: filtered.length,
     transcripts: filtered.slice(-50), // Last 50 transcripts
+  });
+});
+
+// List all tracked packets
+app.get("/packets", (req, res) => {
+  const limit = Number(req.query.limit) || 50;
+  const allIds = packetTracker.getAllPacketIds();
+  const recent = packetTracker.getRecentPackets(limit);
+
+  // Add human-readable timestamps on demand
+  const packetsWithTimestamps = recent.map((packet) => ({
+    ...packet,
+    firstEvent: {
+      ...packet.firstEvent,
+      timestampHuman: packetTracker.formatHumanTimestamp(
+        packet.firstEvent.timestamp
+      ),
+      timestampISO: packetTracker.formatISOTimestamp(
+        packet.firstEvent.timestamp
+      ),
+    },
+    lastEvent: {
+      ...packet.lastEvent,
+      timestampHuman: packetTracker.formatHumanTimestamp(
+        packet.lastEvent.timestamp
+      ),
+      timestampISO: packetTracker.formatISOTimestamp(
+        packet.lastEvent.timestamp
+      ),
+    },
+  }));
+
+  res.json({
+    totalTracked: allIds.length,
+    showing: recent.length,
+    packets: packetsWithTimestamps,
+  });
+});
+
+// View packet tracking data (supports partial ID match)
+app.get("/packets/:packetId", (req, res) => {
+  const { packetId } = req.params;
+  if (!packetId) {
+    return res.status(400).json({ error: "packetId is required" });
+  }
+
+  // Try exact match first
+  let events = packetTracker.getPacketEvents(packetId);
+
+  // If no exact match, try prefix match
+  if (events.length === 0) {
+    const matchingIds = packetTracker.findPacketIds(packetId);
+    if (matchingIds.length === 1 && matchingIds[0]) {
+      // Single match, use it
+      const matchedId = matchingIds[0];
+      const eventsWithTimestamps =
+        packetTracker.getPacketEventsWithHumanTimestamps(matchedId);
+      const latencyWithTimestamps =
+        packetTracker.getPacketLatencyWithHumanTimestamps(matchedId);
+      return res.json({
+        packetId: matchedId,
+        matchedFrom: packetId,
+        events: eventsWithTimestamps,
+        latency: latencyWithTimestamps,
+      });
+    } else if (matchingIds.length > 1) {
+      // Multiple matches
+      return res.json({
+        packetId,
+        error: "Multiple packets match this ID",
+        matchingIds: matchingIds.slice(0, 10), // Return first 10 matches
+      });
+    }
+  }
+
+  // Get events and latency with human-readable timestamps (computed on demand)
+  const eventsWithTimestamps =
+    packetTracker.getPacketEventsWithHumanTimestamps(packetId);
+  const latencyWithTimestamps =
+    packetTracker.getPacketLatencyWithHumanTimestamps(packetId);
+
+  return res.json({
+    packetId,
+    events: eventsWithTimestamps,
+    latency: latencyWithTimestamps,
   });
 });
 

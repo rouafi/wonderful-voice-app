@@ -1,5 +1,6 @@
 import { createClient, LiveTranscriptionEvents } from "@deepgram/sdk";
 import { config } from "../config/index.js";
+import { packetTracker, PacketStage } from "./packetTracker.js";
 
 // Simple in-memory transcript storage
 export const transcripts: Array<{
@@ -56,6 +57,14 @@ export function createDeepgramClient() {
       if (transcripts.length > 100) {
         transcripts.shift();
       }
+
+      // Track STT processing and correlate with sent batches
+      const processedPacketIds = packetTracker.trackSTTProcessed(
+        transcript,
+        isFinal,
+        timestamp,
+        5000 // 5 second correlation window
+      );
 
       console.log(
         `📝 [${

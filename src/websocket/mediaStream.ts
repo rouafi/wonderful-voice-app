@@ -2,6 +2,8 @@ import { WebSocketServer, WebSocket } from "ws";
 import { IncomingMessage } from "http";
 import { createDeepgramClient } from "../services/deepgram.js";
 import { BatchingBackpressureService } from "../services/backpressure.js";
+import { packetTracker, PacketStage } from "../services/packetTracker.js";
+import { randomUUID } from "crypto";
 
 export function createMediaStreamServer(server: any): WebSocketServer {
   console.log("🔧 Setting up WebSocket server on path: /media-stream");
@@ -96,9 +98,17 @@ export function createMediaStreamServer(server: any): WebSocketServer {
           // Send individual packet - batching handled by backpressure service
           if (backpressureService && message.media?.payload) {
             try {
+              const packetId = randomUUID();
               const audioBuffer = Buffer.from(message.media.payload, "base64");
+
+              // Track packet arrival
+              packetTracker.track(packetId, PacketStage.ARRIVED_FROM_TWILIO, {
+                packetNumber: mediaPacketCount,
+                payloadSize: audioBuffer.length,
+              });
+
               // Backpressure service handles batching and queuing automatically
-              await backpressureService.add(audioBuffer);
+              await backpressureService.add(audioBuffer, packetId);
 
               // Log queue size periodically
               const queueSize = await backpressureService.getQueueSize();

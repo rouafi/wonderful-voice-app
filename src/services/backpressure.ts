@@ -1,4 +1,6 @@
 import { Queue, InMemoryQueue } from "./queue.js";
+import { packetTracker, PacketStage } from "./packetTracker.js";
+import { randomUUID } from "crypto";
 
 export interface BackpressureOptions {
   maxQueueSize?: number;
@@ -12,8 +14,13 @@ export interface BatchingBackpressureOptions extends BackpressureOptions {
   batchTimeout?: number; // Max time (ms) to wait before sending partial batch
 }
 
+interface QueuedItem<T> {
+  item: T;
+  batchId?: string;
+}
+
 export class BackpressureService<T> {
-  private queue: Queue<T>;
+  private queue: Queue<QueuedItem<T>>;
   private isProcessing: boolean = false;
   private processInterval: number;
   private onQueueFull?: () => void;
@@ -35,7 +42,7 @@ export class BackpressureService<T> {
 
     // Use in-memory queue by default, can be swapped later
     const maxSize = options.maxQueueSize || 1000;
-    this.queue = new InMemoryQueue<T>(maxSize);
+    this.queue = new InMemoryQueue<QueuedItem<T>>(maxSize);
 
     // Start processing queue
     this.startProcessing();
@@ -44,10 +51,16 @@ export class BackpressureService<T> {
   /**
    * Add item to queue or send immediately if possible
    */
-  async add(item: T): Promise<void> {
+  async add(item: T, batchId?: string): Promise<void> {
     // Try to send immediately if possible
     if (this.canSend()) {
       try {
+        const sendTimestamp = Date.now();
+        if (batchId) {
+          packetTracker.trackBatchEvent(batchId, PacketStage.SENT_TO_DEEPGRAM);
+          // Track batch sent for STT correlation
+          packetTracker.trackBatchSent(batchId, sendTimestamp);
+        }
         await this.sendItem(item);
         return;
       } catch (error) {
@@ -58,7 +71,10 @@ export class BackpressureService<T> {
 
     // Queue the item
     try {
-      await this.queue.enqueue(item);
+      if (batchId) {
+        packetTracker.trackBatchEvent(batchId, PacketStage.QUEUED);
+      }
+      await this.queue.enqueue({ item, batchId });
     } catch (error) {
       // Queue is full
       if (this.onQueueFull) {
@@ -83,10 +99,16 @@ export class BackpressureService<T> {
 
     try {
       while (!(await this.queue.isEmpty()) && this.canSend()) {
-        const item = await this.queue.dequeue();
-        if (item) {
+        const queuedItem = await this.queue.dequeue();
+        if (queuedItem) {
           try {
-            await this.sendItem(item);
+            if (queuedItem.batchId) {
+              packetTracker.trackBatchEvent(
+                queuedItem.batchId,
+                PacketStage.SENT_TO_DEEPGRAM
+              );
+            }
+            await this.sendItem(queuedItem.item);
           } catch (error) {
             // If send fails, put item back at front of queue
             console.error("❌ Error sending queued item:", error);
@@ -141,7 +163,7 @@ export class BackpressureService<T> {
   /**
    * Replace queue implementation (for swapping to cloud service)
    */
-  setQueue(queue: Queue<T>): void {
+  setQueue(queue: Queue<QueuedItem<T>>): void {
     this.queue = queue;
   }
 }
@@ -153,6 +175,7 @@ export class BackpressureService<T> {
 export class BatchingBackpressureService<T> {
   private backpressureService: BackpressureService<T>;
   private batchBuffer: T[] = [];
+  private batchPacketIds: string[] = []; // Track packet IDs in current batch
   private batchSize: number;
   private batchTimeout: number;
   private batchTimer?: NodeJS.Timeout;
@@ -183,15 +206,22 @@ export class BatchingBackpressureService<T> {
     this.flushBatch = async () => {
       if (this.batchBuffer.length === 0) return;
 
+      const batchId = randomUUID();
       const batched = this.combineBatch(this.batchBuffer);
+      const packetIds = [...this.batchPacketIds];
+
+      // Track batch creation
+      packetTracker.trackBatch(batchId, packetIds);
+
       this.batchBuffer = [];
-      
+      this.batchPacketIds = [];
+
       if (this.batchTimer) {
         clearTimeout(this.batchTimer);
         this.batchTimer = undefined;
       }
 
-      await this.backpressureService.add(batched);
+      await this.backpressureService.add(batched, batchId);
     };
 
     // Start batch timeout timer
@@ -210,8 +240,14 @@ export class BatchingBackpressureService<T> {
   /**
    * Add individual item - will be batched automatically
    */
-  async add(item: T): Promise<void> {
+  async add(item: T, packetId?: string): Promise<string> {
+    const id = packetId || randomUUID();
+
+    // Track buffering
+    packetTracker.track(id, PacketStage.BUFFERED);
+
     this.batchBuffer.push(item);
+    this.batchPacketIds.push(id);
 
     // If batch is full, flush immediately
     if (this.batchBuffer.length >= this.batchSize) {
@@ -220,6 +256,8 @@ export class BatchingBackpressureService<T> {
       // Restart timer for partial batch
       this.startBatchTimer();
     }
+
+    return id;
   }
 
   /**
@@ -270,8 +308,7 @@ export class BatchingBackpressureService<T> {
   /**
    * Replace queue implementation (for swapping to cloud service)
    */
-  setQueue(queue: Queue<T>): void {
+  setQueue(queue: Queue<{ item: T; batchId?: string }>): void {
     this.backpressureService.setQueue(queue);
   }
 }
-
