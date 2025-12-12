@@ -7,4 +7,7 @@ export const config = {
   },
   websocketUrl: process.env.WEBSOCKET_URL || "https://your-websocket-url.com",
   webhookBaseUrl: process.env.WEBHOOK_BASE_URL || "http://localhost:3000",
+  deepgram: {
+    apiKey: process.env.DEEPGRAM_API_KEY || "",
+  },
 };

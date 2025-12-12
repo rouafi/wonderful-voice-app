@@ -4,6 +4,7 @@ import { createServer } from "http";
 import { incomingCallRouter } from "./routes/incomingCall.js";
 import { startNgrok } from "./utils/ngrok.js";
 import { createMediaStreamServer } from "./websocket/mediaStream.js";
+import { transcripts } from "./services/deepgram.js";
 
 dotenv.config();
 
@@ -40,6 +41,19 @@ app.get("/test-webhook", (req, res) => {
     message: "Webhook endpoint is accessible",
     webhookUrl: "/incoming-call",
     method: "POST",
+  });
+});
+
+// View transcripts endpoint
+app.get("/transcripts", (req, res) => {
+  const finalOnly = req.query.final === "true";
+  const filtered = finalOnly
+    ? transcripts.filter((t) => t.isFinal)
+    : transcripts;
+
+  res.json({
+    count: filtered.length,
+    transcripts: filtered.slice(-50), // Last 50 transcripts
   });
 });
 

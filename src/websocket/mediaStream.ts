@@ -1,5 +1,6 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { IncomingMessage } from "http";
+import { createDeepgramClient } from "../services/deepgram.js";
 
 export function createMediaStreamServer(server: any): WebSocketServer {
   console.log("🔧 Setting up WebSocket server on path: /media-stream");
@@ -33,6 +34,15 @@ export function createMediaStreamServer(server: any): WebSocketServer {
 
     let mediaPacketCount = 0;
     let lastLogTime = Date.now();
+    let deepgramConnection: ReturnType<typeof createDeepgramClient> | null =
+      null;
+
+    // Initialize Deepgram connection
+    try {
+      deepgramConnection = createDeepgramClient();
+    } catch (error) {
+      console.error("❌ Failed to initialize Deepgram:", error);
+    }
 
     // Handle incoming messages from Twilio
     ws.on("message", (data: Buffer) => {
@@ -51,6 +61,23 @@ export function createMediaStreamServer(server: any): WebSocketServer {
         } else if (message.event === "media") {
           // Audio data is base64 encoded in message.media.payload
           mediaPacketCount++;
+
+          // Forward audio to Deepgram
+          if (deepgramConnection && message.media?.payload) {
+            try {
+              const audioBuffer = Buffer.from(message.media.payload, "base64");
+              // Send buffer directly - Deepgram SDK accepts Buffer
+              (deepgramConnection.send as any)(audioBuffer);
+            } catch (error) {
+              console.error("❌ Error sending audio to Deepgram:", error);
+            }
+          } else {
+            if (mediaPacketCount === 1) {
+              console.log("⚠️ Deepgram connection not available or no payload");
+              console.log("   deepgramConnection:", !!deepgramConnection);
+              console.log("   payload exists:", !!message.media?.payload);
+            }
+          }
 
           // Log every 50 packets or every 5 seconds (to avoid spam)
           const now = Date.now();
@@ -84,6 +111,9 @@ export function createMediaStreamServer(server: any): WebSocketServer {
 
     ws.on("close", () => {
       console.log("🔌 WebSocket connection closed");
+      if (deepgramConnection) {
+        deepgramConnection.finish();
+      }
     });
 
     // Send a welcome message (optional)
