@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import twilio from "twilio";
 import { config } from "../config/index.js";
+import { phoneStore } from "../services/phoneStore.js";
 
 const router = Router();
 const VoiceResponse = twilio.twiml.VoiceResponse;
@@ -11,6 +12,11 @@ router.post("/", (req: Request, res: Response) => {
     console.log("Call SID:", req.body.CallSid);
     console.log("From:", req.body.From);
     console.log("To:", req.body.To);
+
+    // Store patient phone number for later use
+    if (req.body.CallSid && req.body.From) {
+      phoneStore.setPhone(req.body.CallSid, req.body.From);
+    }
 
     const twiml = new VoiceResponse();
 

@@ -16,6 +16,7 @@ export class VADService {
   private states: Map<string, VADState> = new Map();
   private configs: Map<string, VADConfig> = new Map();
   private checkIntervals: Map<string, NodeJS.Timeout> = new Map();
+  private delayedCheckTimeouts: Map<string, NodeJS.Timeout> = new Map(); // Timeouts before starting frequent checks
   private turnCompleteLogged: Set<string> = new Set(); // Track which calls already logged turn complete
   private turnCompleteCallbacks: Map<string, TurnCompleteCallback> = new Map();
 
@@ -49,6 +50,10 @@ export class VADService {
     // Final transcript = turn might be ending
     if (isFinal) {
       state.lastFinalTranscriptTime = now;
+      // Stop frequent checking and reset to delayed mode
+      this.stopFrequentChecking(callSid);
+      // Start delayed check: wait 2 seconds, then start frequent checking
+      this.startDelayedCheck(callSid);
     }
   }
 
@@ -65,6 +70,15 @@ export class VADService {
     // If silence exceeds threshold, mark as not speaking
     const config = this.configs.get(callSid) || this.getDefaultConfig();
     if (state.silenceDuration >= config.silenceTimeout) {
+      if (state.isSpeaking) {
+        // Only log when transitioning from speaking to not speaking
+        console.log(
+          `🔇 VAD: Marking as not speaking for call ${callSid.substring(
+            0,
+            8
+          )} - ` + `silence: ${state.silenceDuration}ms`
+        );
+      }
       state.isSpeaking = false;
     }
   }
@@ -76,21 +90,34 @@ export class VADService {
   isTurnComplete(callSid: string): boolean {
     const state = this.states.get(callSid);
     const config = this.configs.get(callSid) || this.getDefaultConfig();
-    console.log("VAD config", config);
-    console.log("VAD state", state);
 
     if (!state) return false;
 
-    // Update silence duration
+    // Update silence duration first
     this.updateSilence(callSid);
 
-    // Turn complete if: not speaking AND silence exceeds timeout
-    const isComplete =
-      !state.isSpeaking && state.silenceDuration >= config.silenceTimeout;
+    // Turn complete if: silence exceeds timeout (regardless of isSpeaking flag)
+    // This ensures we detect completion even if isSpeaking wasn't properly set to false
+    const isComplete = state.silenceDuration >= config.silenceTimeout;
 
     // Only return true if we haven't already logged this turn completion
-    if (isComplete && !this.turnCompleteLogged.has(callSid)) {
+    // AND we've had at least one transcript (to avoid false positives at call start)
+    const hasHadTranscript =
+      state.lastTranscriptTime > 0 && state.lastFinalTranscriptTime > 0;
+
+    if (
+      isComplete &&
+      hasHadTranscript &&
+      !this.turnCompleteLogged.has(callSid)
+    ) {
       this.turnCompleteLogged.add(callSid);
+      console.log(
+        `🎯 VAD: Turn complete detected for call ${callSid.substring(
+          0,
+          8
+        )} - ` +
+          `silence: ${state.silenceDuration}ms (threshold: ${config.silenceTimeout}ms)`
+      );
       return true;
     }
 
@@ -98,14 +125,42 @@ export class VADService {
   }
 
   /**
-   * Start periodic checking for turn completion
+   * Start delayed check: wait 2 seconds after last transcript, then start frequent checking
    */
-  private startPeriodicCheck(callSid: string): void {
-    // Clear existing interval if any
-    const existing = this.checkIntervals.get(callSid);
-    if (existing) {
-      clearInterval(existing);
+  private startDelayedCheck(callSid: string): void {
+    // Clear existing delayed timeout if any
+    const existingTimeout = this.delayedCheckTimeouts.get(callSid);
+    if (existingTimeout) {
+      clearTimeout(existingTimeout);
     }
+
+    // Wait 2 seconds before starting frequent checks
+    const timeout = setTimeout(() => {
+      this.delayedCheckTimeouts.delete(callSid);
+      // Now start frequent checking (200ms interval)
+      this.startFrequentChecking(callSid);
+    }, 2000); // Wait 2 seconds
+
+    this.delayedCheckTimeouts.set(callSid, timeout);
+  }
+
+  /**
+   * Stop frequent checking (when new transcript arrives)
+   */
+  private stopFrequentChecking(callSid: string): void {
+    const interval = this.checkIntervals.get(callSid);
+    if (interval) {
+      clearInterval(interval);
+      this.checkIntervals.delete(callSid);
+    }
+  }
+
+  /**
+   * Start frequent checking (200ms interval) - called after 2 second delay
+   */
+  private startFrequentChecking(callSid: string): void {
+    // Clear existing interval if any
+    this.stopFrequentChecking(callSid);
 
     // Check every 200ms for responsive detection
     const interval = setInterval(() => {
@@ -119,13 +174,33 @@ export class VADService {
 
       // Update silence and check for turn completion
       this.updateSilence(callSid);
-      if (this.isTurnComplete(callSid)) {
-        // Trigger callback or event (will be handled by caller)
+
+      // Only check for turn completion if we've had at least one transcript
+      // (to avoid false positives at call start)
+      if (state.lastFinalTranscriptTime > 0 && this.isTurnComplete(callSid)) {
+        // Trigger callback
         this.onTurnComplete(callSid);
+        // Stop frequent checking after turn is detected (will restart on next transcript)
+        this.stopFrequentChecking(callSid);
       }
     }, 200); // Check every 200ms
 
     this.checkIntervals.set(callSid, interval);
+    console.log(
+      `⏱️ VAD: Started frequent checking (200ms) for call ${callSid.substring(
+        0,
+        8
+      )}`
+    );
+  }
+
+  /**
+   * Start periodic checking for turn completion (legacy - now uses delayed check)
+   */
+  private startPeriodicCheck(callSid: string): void {
+    // This is called when state is first created
+    // We don't start checking immediately - wait for first transcript
+    // The checking will start after first final transcript via startDelayedCheck
   }
 
   /**
@@ -163,6 +238,25 @@ export class VADService {
     if (onTurnComplete) {
       this.turnCompleteCallbacks.set(callSid, onTurnComplete);
     }
+
+    // Initialize state if it doesn't exist yet
+    if (!this.states.has(callSid)) {
+      const now = Date.now();
+      this.states.set(callSid, {
+        isSpeaking: false,
+        lastTranscriptTime: now,
+        silenceDuration: 0,
+        lastFinalTranscriptTime: 0,
+      });
+      // Start periodic checking
+      this.startPeriodicCheck(callSid);
+      console.log(
+        `✅ VAD state initialized and periodic check started for call ${callSid.substring(
+          0,
+          8
+        )}`
+      );
+    }
   }
 
   /**
@@ -180,10 +274,13 @@ export class VADService {
    */
   cleanup(callSid: string): void {
     // Clear periodic check interval
-    const interval = this.checkIntervals.get(callSid);
-    if (interval) {
-      clearInterval(interval);
-      this.checkIntervals.delete(callSid);
+    this.stopFrequentChecking(callSid);
+
+    // Clear delayed check timeout
+    const delayedTimeout = this.delayedCheckTimeouts.get(callSid);
+    if (delayedTimeout) {
+      clearTimeout(delayedTimeout);
+      this.delayedCheckTimeouts.delete(callSid);
     }
 
     this.states.delete(callSid);

@@ -3,6 +3,8 @@ import { IncomingMessage } from "http";
 import { packetTracker, PacketStage } from "../services/packetTracker.js";
 import { sessionManager } from "../services/sessionManager.js";
 import { vadService } from "../services/vad.js";
+import { phoneStore } from "../services/phoneStore.js";
+import { agentManager } from "../services/agent.js";
 import { randomUUID } from "crypto";
 
 export function createMediaStreamServer(server: any): WebSocketServer {
@@ -70,7 +72,7 @@ export function createMediaStreamServer(server: any): WebSocketServer {
                   mode: "patient",
                   silenceTimeout: 2000, // 2s for booking questions
                 },
-                (callSid) => {
+                async (callSid) => {
                   // Callback when turn is complete
                   console.log(
                     `🎯 Turn complete for call ${callSid.substring(
@@ -78,7 +80,93 @@ export function createMediaStreamServer(server: any): WebSocketServer {
                       8
                     )} - patient finished speaking`
                   );
-                  // TODO: Trigger agent response or next action here
+
+                  // Get patient phone number
+                  const patientPhone = phoneStore.getPhone(callSid);
+                  if (!patientPhone) {
+                    console.warn(
+                      `⚠️ No phone number found for call ${callSid.substring(
+                        0,
+                        8
+                      )}`
+                    );
+                    return;
+                  }
+
+                  // Get latest final transcript from session
+                  const session = sessionManager.getSession(callSid);
+                  if (!session) {
+                    console.warn(
+                      `⚠️ No session found for call ${callSid.substring(0, 8)}`
+                    );
+                    return;
+                  }
+
+                  // Get the most recent final transcript
+                  const finalTranscripts = session.transcripts.filter(
+                    (t) => t.isFinal
+                  );
+                  if (finalTranscripts.length === 0) {
+                    console.log(
+                      `ℹ️ No final transcripts yet for call ${callSid.substring(
+                        0,
+                        8
+                      )}`
+                    );
+                    return;
+                  }
+
+                  // Use the latest final transcript
+                  const latestTranscript =
+                    finalTranscripts[finalTranscripts.length - 1];
+                  if (!latestTranscript) {
+                    console.log(
+                      `ℹ️ No valid transcript found for call ${callSid.substring(
+                        0,
+                        8
+                      )}`
+                    );
+                    return;
+                  }
+
+                  console.log(
+                    `🤖 Processing transcript with agent: "${latestTranscript.text}"`
+                  );
+
+                  if (!agentManager) {
+                    console.error(
+                      "❌ Agent manager not initialized. Cannot process transcript."
+                    );
+                    return;
+                  }
+
+                  try {
+                    // Process with agent
+                    const agentResponse = await agentManager.processTranscript(
+                      callSid,
+                      patientPhone,
+                      latestTranscript.text
+                    );
+
+                    console.log(`🤖 Agent response: ${agentResponse.text}`);
+                    if (agentResponse.intent === "book_appointment") {
+                      console.log(`✅ Appointment booking intent detected`);
+                    }
+                    if (
+                      agentResponse.toolCalls &&
+                      agentResponse.toolCalls.length > 0
+                    ) {
+                      console.log(
+                        `🔧 Tool calls executed:`,
+                        agentResponse.toolCalls
+                      );
+                    }
+                  } catch (error: any) {
+                    console.error(
+                      `❌ Error processing transcript with agent:`,
+                      error.message
+                    );
+                  }
                 }
               );
               console.log("✅ VAD configured for patient mode");

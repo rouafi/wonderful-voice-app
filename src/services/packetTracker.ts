@@ -189,7 +189,7 @@ export class PacketTracker {
       : "";
     const packetInfo = ` packet:${event.packetId.substring(0, 8)}`;
 
-    console.log(`${timestamp} ${stageLabel}${packetInfo}${batchInfo}`);
+    //console.log(`${timestamp} ${stageLabel}${packetInfo}${batchInfo}`);
   }
 
   /**

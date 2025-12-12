@@ -1,5 +1,4 @@
 import express from "express";
-import dotenv from "dotenv";
 import { createServer } from "http";
 import { incomingCallRouter } from "./routes/incomingCall.js";
 import { startNgrok } from "./utils/ngrok.js";
@@ -8,8 +7,8 @@ import { transcripts } from "./services/deepgram.js";
 import { packetTracker } from "./services/packetTracker.js";
 import { sessionManager } from "./services/sessionManager.js";
 import { vadService } from "./services/vad.js";
-
-dotenv.config();
+import { config } from "./config/index.js";
+import { initializeAgentManager, agentManager } from "./services/agent.js";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -232,6 +231,60 @@ app.get("/calls/:callSid/vad", (req, res) => {
     isTurnComplete,
   });
 });
+
+// Mock call endpoint for testing agent without full calling flow
+app.post("/mock-call", async (req, res) => {
+  try {
+    const { text, callSid, phoneNumber } = req.body;
+
+    if (!text) {
+      return res.status(400).json({ error: "Text is required" });
+    }
+
+    if (!agentManager) {
+      return res.status(503).json({
+        error: "Agent manager not initialized",
+        message: "OPENROUTER_API_KEY may not be configured",
+      });
+    }
+
+    // Use provided values or generate mock ones
+    const mockCallSid = callSid || `mock-call-${Date.now()}`;
+    const mockPhoneNumber = phoneNumber || "+33601051882";
+
+    console.log(`🧪 Mock call test - Processing: "${text}"`);
+    console.log(`   Call SID: ${mockCallSid}`);
+    console.log(`   Phone: ${mockPhoneNumber}`);
+
+    const agentResponse = await agentManager.processTranscript(
+      mockCallSid,
+      mockPhoneNumber,
+      text
+    );
+
+    return res.json({
+      success: true,
+      input: {
+        text,
+        callSid: mockCallSid,
+        phoneNumber: mockPhoneNumber,
+      },
+      agentResponse,
+    });
+  } catch (error: any) {
+    console.error("❌ Error in mock-call endpoint:", error);
+    return res.status(500).json({
+      error: "Failed to process mock call",
+      message: error.message,
+    });
+  }
+});
+
+// Initialize agent manager with API key from config
+// Check config first (loads from .env via dotenv), then fallback to process.env
+const openRouterApiKey =
+  config.openRouter.apiKey || process.env.OPENROUTER_API_KEY || "";
+initializeAgentManager(openRouterApiKey);
 
 // Create WebSocket server for media streams (handles upgrade automatically)
 const wss = createMediaStreamServer(server);

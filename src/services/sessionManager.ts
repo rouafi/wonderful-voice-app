@@ -1,6 +1,8 @@
 import { createDeepgramClient } from "./deepgram.js";
 import { BatchingBackpressureService } from "./backpressure.js";
 import { vadService } from "./vad.js";
+import { agentManager } from "./agent.js";
+import { phoneStore } from "./phoneStore.js";
 
 export interface CallSession {
   callSid: string;
@@ -161,6 +163,14 @@ export class SessionManager {
 
     // Cleanup VAD state
     vadService.cleanup(callSid);
+
+    // Cleanup agent context (if initialized)
+    if (agentManager) {
+      agentManager.cleanup(callSid);
+    }
+
+    // Cleanup phone number
+    phoneStore.remove(callSid);
 
     // Keep session for querying (don't delete immediately)
     // Optionally: delete after some time or limit total sessions
