@@ -189,14 +189,72 @@ export function createMediaStreamServer(server: any): WebSocketServer {
                   }
 
                   try {
-                    // Process with agent
+                    let agentResponse;
+                    let agentLatency = 0;
                     const agentStartTime = Date.now();
-                    const agentResponse = await agentManager.processTranscript(
-                      callSid,
-                      patientPhone,
-                      latestTranscript.text
-                    );
-                    const agentLatency = Date.now() - agentStartTime;
+
+                    // Check if we have early processing result
+                    if (
+                      session.earlyProcessing &&
+                      session.earlyProcessing.result
+                    ) {
+                      // Use cached result from early processing
+                      agentResponse = session.earlyProcessing.result;
+                      agentLatency =
+                        Date.now() -
+                        session.earlyProcessing.processingStartTime;
+                      const timeSaved =
+                        agentStartTime -
+                        session.earlyProcessing.processingStartTime;
+                      console.log(
+                        `⚡ Using early processing result - saved ~${timeSaved}ms`
+                      );
+                      console.log(
+                        `   Early processing latency: ${agentLatency}ms (from start of early processing)`
+                      );
+                      // Clear early processing
+                      session.earlyProcessing = undefined;
+                    } else if (
+                      session.earlyProcessing &&
+                      session.earlyProcessing.promise
+                    ) {
+                      // Early processing is still in progress, wait for it
+                      console.log(
+                        `⏳ Early processing in progress - waiting for result...`
+                      );
+                      try {
+                        agentResponse = await session.earlyProcessing.promise;
+                        agentLatency =
+                          Date.now() -
+                          session.earlyProcessing.processingStartTime;
+                        const timeSaved =
+                          agentStartTime -
+                          session.earlyProcessing.processingStartTime;
+                        console.log(
+                          `✅ Early processing completed - saved ~${timeSaved}ms`
+                        );
+                        session.earlyProcessing = undefined;
+                      } catch (error) {
+                        console.warn(
+                          `⚠️ Early processing failed, falling back to normal processing`
+                        );
+                        // Fall back to normal processing
+                        agentResponse = await agentManager.processTranscript(
+                          callSid,
+                          patientPhone,
+                          latestTranscript.text
+                        );
+                        agentLatency = Date.now() - agentStartTime;
+                      }
+                    } else {
+                      // No early processing - process normally
+                      agentResponse = await agentManager.processTranscript(
+                        callSid,
+                        patientPhone,
+                        latestTranscript.text
+                      );
+                      agentLatency = Date.now() - agentStartTime;
+                    }
 
                     console.log(`🤖 Agent response: ${agentResponse.text}`);
                     console.log(`   LLM latency: ${agentLatency}ms`);

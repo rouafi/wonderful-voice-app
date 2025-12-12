@@ -24,6 +24,17 @@ export interface CallSession {
   }>;
   packetCount: number;
   status: "active" | "ended";
+  // Early processing state for interim transcripts
+  earlyProcessing?: {
+    transcript: string;
+    processingStartTime: number;
+    promise?: Promise<any>;
+    result?: any;
+  };
+  lastInterimTranscript?: {
+    text: string;
+    timestamp: number;
+  };
 }
 
 export class SessionManager {
