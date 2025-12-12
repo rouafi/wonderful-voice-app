@@ -117,7 +117,7 @@ export class BookingAgent {
               function: {
                 name: "checkDoctorAvailability",
                 description:
-                  "Check if a doctor is available at a specific date and time. Use this when the user wants to book an appointment.",
+                  "Check if a doctor is available at a specific date and time. ONLY use this when you are >80% certain about the date and time. If uncertain, ask for clarification instead.",
                 parameters: {
                   type: "object",
                   properties: {
@@ -131,8 +131,15 @@ export class BookingAgent {
                       description:
                         "Optional doctor ID. If not provided, will find first available doctor.",
                     },
+                    confidence: {
+                      type: "number",
+                      description:
+                        "Your confidence level (0.0 to 1.0) that the dateTime is correctly understood. Must be >0.8 to proceed.",
+                      minimum: 0,
+                      maximum: 1,
+                    },
                   },
-                  required: ["dateTime"],
+                  required: ["dateTime", "confidence"],
                 },
               },
             },
@@ -216,6 +223,31 @@ export class BookingAgent {
           const args = JSON.parse(toolCall.function.arguments);
           console.log(`   Parsed arguments:`, JSON.stringify(args, null, 2));
 
+          const confidence = args.confidence || 0;
+          console.log(`   Confidence level: ${(confidence * 100).toFixed(0)}%`);
+
+          // Only proceed if confidence > 80%
+          if (confidence < 0.8) {
+            console.log(
+              `⚠️ Confidence too low (${(confidence * 100).toFixed(
+                0
+              )}% < 80%), asking for clarification`
+            );
+            results.push({
+              tool_call_id: toolCall.id,
+              role: "tool",
+              name: "checkDoctorAvailability",
+              content: JSON.stringify({
+                error: "confidence_too_low",
+                message: `Confidence level ${(confidence * 100).toFixed(
+                  0
+                )}% is below the required 80%. Please ask the patient to clarify the date and time.`,
+                confidence: confidence,
+              }),
+            });
+            continue; // Skip to next tool call
+          }
+
           const query: AvailabilityQuery = {
             dateTime: args.dateTime,
             doctorId: args.doctorId,
@@ -240,6 +272,7 @@ export class BookingAgent {
           console.log(`   Message: ${availability.message || "N/A"}`);
 
           // Send SMS confirmation (fire and forget - don't wait for result)
+          // Only send if confidence was high enough (already checked above)
           if (availability.available) {
             console.log(`\n📱 Sending SMS confirmation (fire-and-forget):`);
             console.log(`   To: ${context.patientPhone}`);
@@ -402,8 +435,16 @@ Guidelines:
 - Ask for clarification if the date/time is unclear
 - When a patient mentions wanting to book, use the checkDoctorAvailability tool
 - If the patient doesn't specify a doctor, find any available doctor
+- CRITICAL: Only use checkDoctorAvailability when you are >80% certain about the date and time
+- If you're less than 80% certain, ask for clarification instead
 - Always confirm the appointment details before booking
 - Keep responses concise for voice conversations
+
+IMPORTANT - When confirming an appointment, always mention:
+- The doctor's full name (e.g., "Dr. Sarah Smith" or "Dr. Michael Johnson")
+- The appointment date and time in a natural, readable format (e.g., "Monday, January 15, 2024, at 2:30 PM")
+- Format your confirmation like: "Your appointment with [Doctor Name] is confirmed for [Date and Time]"
+- Example: "Great! Your appointment with Dr. Sarah Smith is confirmed for Monday, January 15, 2024, at 2:30 PM. You'll receive an SMS confirmation shortly."
 
 Current patient phone: ${context.patientPhone}
 Call SID: ${context.callSid}`;

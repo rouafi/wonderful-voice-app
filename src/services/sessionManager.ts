@@ -4,6 +4,8 @@ import { vadService } from "./vad.js";
 import { agentManager } from "./agent.js";
 import { phoneStore } from "./phoneStore.js";
 
+import { WebSocket } from "ws";
+
 export interface CallSession {
   callSid: string;
   streamSid?: string;
@@ -13,6 +15,7 @@ export interface CallSession {
   startedAt: number;
   deepgramConnection: ReturnType<typeof createDeepgramClient>;
   backpressureService: BatchingBackpressureService<Buffer>;
+  webSocket?: WebSocket; // WebSocket connection for sending audio back
   transcripts: Array<{
     text: string;
     isFinal: boolean;
@@ -36,6 +39,7 @@ export class SessionManager {
       accountSid?: string;
       from?: string;
       to?: string;
+      webSocket?: WebSocket;
     }
   ): CallSession {
     // Clean up existing session if any (shouldn't happen, but safety)
@@ -81,6 +85,7 @@ export class SessionManager {
       startedAt: Date.now(),
       deepgramConnection,
       backpressureService,
+      webSocket: metadata?.webSocket,
       transcripts: [],
       packetCount: 0,
       status: "active",

@@ -5,6 +5,7 @@ import { sessionManager } from "../services/sessionManager.js";
 import { vadService } from "../services/vad.js";
 import { phoneStore } from "../services/phoneStore.js";
 import { agentManager } from "../services/agent.js";
+import { textToSpeech, sendAudioToTwilio } from "../services/tts.js";
 import { randomUUID } from "crypto";
 
 export function createMediaStreamServer(server: any): WebSocketServer {
@@ -62,6 +63,7 @@ export function createMediaStreamServer(server: any): WebSocketServer {
               const session = sessionManager.createSession(callSid, {
                 streamSid: message.start?.streamSid,
                 accountSid: message.start?.accountSid,
+                webSocket: ws, // Store WebSocket for sending audio back
               });
               console.log("✅ Session created via SessionManager");
 
@@ -159,6 +161,40 @@ export function createMediaStreamServer(server: any): WebSocketServer {
                       console.log(
                         `🔧 Tool calls executed:`,
                         agentResponse.toolCalls
+                      );
+                    }
+
+                    // Convert agent response to speech and send back to caller (fire-and-forget)
+                    if (
+                      agentResponse.text &&
+                      session.webSocket &&
+                      session.streamSid
+                    ) {
+                      // Fire and forget - don't await, just trigger and continue
+                      textToSpeech(agentResponse.text, {
+                        encoding: "mulaw",
+                        sampleRate: 8000,
+                      })
+                        .then((audioBuffer) => {
+                          sendAudioToTwilio(
+                            session.webSocket!,
+                            session.streamSid!,
+                            audioBuffer
+                          );
+                          console.log(
+                            `✅ Agent response sent as audio to caller`
+                          );
+                        })
+                        .catch((ttsError: any) => {
+                          console.error(
+                            `❌ Error converting/sending TTS:`,
+                            ttsError.message
+                          );
+                        });
+
+                      // Don't wait for TTS - continue immediately
+                      console.log(
+                        `🔊 TTS conversion started (fire-and-forget)`
                       );
                     }
                   } catch (error: any) {
