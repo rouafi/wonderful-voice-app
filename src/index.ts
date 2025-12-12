@@ -9,6 +9,7 @@ import { sessionManager } from "./services/sessionManager.js";
 import { vadService } from "./services/vad.js";
 import { config } from "./config/index.js";
 import { initializeAgentManager, agentManager } from "./services/agent.js";
+import { responsePrefetcher } from "./services/responsePrefetcher.js";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;

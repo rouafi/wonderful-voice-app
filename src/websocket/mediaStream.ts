@@ -6,6 +6,7 @@ import { vadService } from "../services/vad.js";
 import { phoneStore } from "../services/phoneStore.js";
 import { agentManager } from "../services/agent.js";
 import { textToSpeech, sendAudioToTwilio } from "../services/tts.js";
+import { responsePrefetcher } from "../services/responsePrefetcher.js";
 import { randomUUID } from "crypto";
 
 export function createMediaStreamServer(server: any): WebSocketServer {
@@ -70,41 +71,81 @@ export function createMediaStreamServer(server: any): WebSocketServer {
               const greetingText = "Hello! How can I help you today?";
               console.log(`👋 Sending immediate greeting: "${greetingText}"`);
 
-              textToSpeech(greetingText, {
-                encoding: "mulaw",
-                sampleRate: 8000,
-              })
-                .then((audioBuffer) => {
-                  // Re-fetch session to ensure we have latest WebSocket state
-                  if (!callSid) {
-                    console.warn(`⚠️ No callSid available for greeting`);
-                    return;
-                  }
-                  const currentSession = sessionManager.getSession(callSid);
-                  if (currentSession?.webSocket && currentSession?.streamSid) {
-                    if (
-                      currentSession.webSocket.readyState === WebSocket.OPEN
-                    ) {
-                      sendAudioToTwilio(
-                        currentSession.webSocket,
-                        currentSession.streamSid,
-                        audioBuffer
-                      );
-                      console.log(`✅ Greeting sent successfully`);
-                    } else {
-                      console.warn(
-                        `⚠️ WebSocket not open yet, greeting will be delayed`
-                      );
-                    }
+              // Check for prefetched greeting first
+              const prefetchedGreeting =
+                responsePrefetcher.getPrefetchedAudio(greetingText);
+
+              if (prefetchedGreeting) {
+                // Use prefetched greeting - instant!
+                if (!callSid) {
+                  console.warn(`⚠️ No callSid available for greeting`);
+                  return;
+                }
+                const currentSession = sessionManager.getSession(callSid);
+                if (currentSession?.webSocket && currentSession?.streamSid) {
+                  if (currentSession.webSocket.readyState === WebSocket.OPEN) {
+                    sendAudioToTwilio(
+                      currentSession.webSocket,
+                      currentSession.streamSid,
+                      prefetchedGreeting
+                    );
+                    console.log(
+                      `⚡ Greeting sent using prefetched audio (instant)`
+                    );
                   } else {
                     console.warn(
-                      `⚠️ Session or WebSocket not available for greeting`
+                      `⚠️ WebSocket not open yet, greeting will be delayed`
                     );
                   }
+                } else {
+                  console.warn(
+                    `⚠️ Session or WebSocket not available for greeting`
+                  );
+                }
+              } else {
+                // Fallback to generating TTS
+                textToSpeech(greetingText, {
+                  encoding: "mulaw",
+                  sampleRate: 8000,
                 })
-                .catch((ttsError: any) => {
-                  console.error(`❌ Error sending greeting:`, ttsError.message);
-                });
+                  .then((audioBuffer) => {
+                    // Re-fetch session to ensure we have latest WebSocket state
+                    if (!callSid) {
+                      console.warn(`⚠️ No callSid available for greeting`);
+                      return;
+                    }
+                    const currentSession = sessionManager.getSession(callSid);
+                    if (
+                      currentSession?.webSocket &&
+                      currentSession?.streamSid
+                    ) {
+                      if (
+                        currentSession.webSocket.readyState === WebSocket.OPEN
+                      ) {
+                        sendAudioToTwilio(
+                          currentSession.webSocket,
+                          currentSession.streamSid,
+                          audioBuffer
+                        );
+                        console.log(`✅ Greeting sent successfully`);
+                      } else {
+                        console.warn(
+                          `⚠️ WebSocket not open yet, greeting will be delayed`
+                        );
+                      }
+                    } else {
+                      console.warn(
+                        `⚠️ Session or WebSocket not available for greeting`
+                      );
+                    }
+                  })
+                  .catch((ttsError: any) => {
+                    console.error(
+                      `❌ Error sending greeting:`,
+                      ttsError.message
+                    );
+                  });
+              }
 
               // Configure VAD for patient booking call with callback
               vadService.configure(
@@ -312,29 +353,51 @@ export function createMediaStreamServer(server: any): WebSocketServer {
                       console.log(`   StreamSid: ${currentSession.streamSid}`);
 
                       // Fire and forget - don't await, just trigger and continue
-                      textToSpeech(agentResponse.text, {
-                        encoding: "mulaw",
-                        sampleRate: 8000,
-                      })
-                        .then((audioBuffer) => {
-                          const ttsLatency = Date.now() - ttsStartTime;
-                          sendAudioToTwilio(
-                            currentSession.webSocket!,
-                            currentSession.streamSid!,
-                            audioBuffer
-                          );
-                          const totalEndToEnd =
-                            Date.now() - turnCompleteStartTime;
-                          console.log(
-                            `✅ Agent response sent as audio to caller [TTS: ${ttsLatency}ms, Total E2E: ${totalEndToEnd}ms]`
-                          );
+                      // Check for prefetched audio first
+                      const prefetchedAudio =
+                        responsePrefetcher.getPrefetchedAudio(
+                          agentResponse.text
+                        );
+
+                      if (prefetchedAudio) {
+                        // Use prefetched audio - instant response!
+                        const ttsLatency = Date.now() - ttsStartTime;
+                        sendAudioToTwilio(
+                          currentSession.webSocket!,
+                          currentSession.streamSid!,
+                          prefetchedAudio
+                        );
+                        const totalEndToEnd =
+                          Date.now() - turnCompleteStartTime;
+                        console.log(
+                          `⚡ Agent response sent using prefetched audio [TTS: ${ttsLatency}ms (cached), Total E2E: ${totalEndToEnd}ms]`
+                        );
+                      } else {
+                        // Generate TTS on demand
+                        textToSpeech(agentResponse.text, {
+                          encoding: "mulaw",
+                          sampleRate: 8000,
                         })
-                        .catch((ttsError: any) => {
-                          console.error(
-                            `❌ Error converting/sending TTS:`,
-                            ttsError.message
-                          );
-                        });
+                          .then((audioBuffer) => {
+                            const ttsLatency = Date.now() - ttsStartTime;
+                            sendAudioToTwilio(
+                              currentSession.webSocket!,
+                              currentSession.streamSid!,
+                              audioBuffer
+                            );
+                            const totalEndToEnd =
+                              Date.now() - turnCompleteStartTime;
+                            console.log(
+                              `✅ Agent response sent as audio to caller [TTS: ${ttsLatency}ms, Total E2E: ${totalEndToEnd}ms]`
+                            );
+                          })
+                          .catch((ttsError: any) => {
+                            console.error(
+                              `❌ Error converting/sending TTS:`,
+                              ttsError.message
+                            );
+                          });
+                      }
 
                       // Don't wait for TTS - continue immediately
                       console.log(
