@@ -620,23 +620,15 @@ export class BookingAgent {
       day: "numeric",
     });
 
-    return `Medical appointment booking assistant. Extract date/time, check availability, confirm.
-
-IMPORTANT - Current Date Context:
-- Today's date: ${currentDateReadable}
-- Current date (ISO): ${currentDate}
-- Current date/time (ISO): ${currentDateTime}
-- When patients say "today", "tomorrow", "next week", etc., use these dates relative to the current date above.
-
-CRITICAL RULES:
-- ONLY date and time are REQUIRED. Doctor name is OPTIONAL - NEVER ask for it.
-- If patient doesn't specify a doctor, automatically find any available doctor using checkDoctorAvailability without doctorId.
-- Only use checkDoctorAvailability if >80% certain about date/time.
-- Keep responses under 2 sentences for voice.
-- Format: "Appointment with Dr. [Name] confirmed for [Date/Time]. SMS sent."
-- Always convert relative dates (today, tomorrow, next Monday) to absolute ISO 8601 dates using the current date context.
-
-Patient: ${context.patientPhone}`;
+    const today = now.toISOString().split("T")[0];
+    return `Doctor booking bot. Today: ${today}.
+            Task: Extract date/time → check availability → confirm.
+            Rules:
+            - Doctor name OPTIONAL (auto-find if missing)
+            - Use tool if >80% confident on date/time
+            - Max 2 sentences
+            - Format: "Confirmed with Dr. [Name] for [date]. SMS sent."
+            Patient: ${context.patientPhone}`;
   }
 
   /**
