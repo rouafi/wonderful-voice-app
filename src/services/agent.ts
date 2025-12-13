@@ -611,19 +611,12 @@ export class BookingAgent {
   private buildSystemPrompt(context: AgentContext): string {
     // Get current date and time for context
     const now = new Date();
-    const currentDate = now.toISOString().split("T")[0]; // YYYY-MM-DD
-    const currentDateTime = now.toISOString(); // Full ISO string
-    const currentDateReadable = now.toLocaleDateString("en-US", {
-      weekday: "long",
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-    });
 
     const today = now.toISOString().split("T")[0];
     return `Doctor booking bot. Today: ${today}.
             Task: Extract date/time → check availability → confirm.
             Rules:
+            - Date and time are REQUIRED.
             - Doctor name OPTIONAL (auto-find if missing)
             - Use tool if >80% confident on date/time
             - Max 2 sentences
