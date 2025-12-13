@@ -4,10 +4,7 @@ dist/
 .DS_Store
 *.log
 
-# Documentation files
-DEBUG.md
-TESTING.md
-TROUBLESHOOTING.md
-TWILIO_SETUP.md
-WEBSOCKET_SETUP.md
+# Documentation files - ignore all .md files except README.md
+*.md
+!README.md
 .env
